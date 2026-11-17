@@ -36,6 +36,10 @@ forward fix, not by guessing at a downgrade.
 
 - Put the frontend and API behind TLS termination and an authenticated ingress. Restrict CORS to
   the exact frontend origin; never expose the development Compose database port publicly.
+- Set `ENVIRONMENT=production`. Startup rejects SQLite and non-HTTPS, non-exact, or localhost CORS
+  origins and PostgreSQL URLs without `sslmode=require`, `verify-ca`, or `verify-full` in this
+  mode. Prefer `verify-full` with the database provider's trusted CA bundle. These configuration
+  guards are not a substitute for TLS termination or network/database access controls.
 - Store `JWT_SECRET_KEY`, database credentials, notification secrets, and AWS role external IDs in a
   secret manager. Rotate them under an approved procedure; do not place secrets in image layers,
   logs, Terraform state, or source control.

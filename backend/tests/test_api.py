@@ -14,6 +14,15 @@ def test_login_rejects_unknown_user(client) -> None:
     assert response.status_code == 401
 
 
+def test_login_rejects_passwords_over_the_configured_input_limit(client) -> None:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "x" * 1025},
+    )
+
+    assert response.status_code == 422
+
+
 def test_profile_requires_bearer_token(client) -> None:
     response = client.get("/api/v1/auth/me")
 

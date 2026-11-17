@@ -1,7 +1,7 @@
 import ipaddress
 import re
 from functools import lru_cache
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -145,6 +145,55 @@ class Settings(BaseSettings):
         if len(account_ids) != len(set(account_ids)):
             raise ValueError("MONITORED_AWS_ACCOUNTS cannot contain duplicate account IDs")
         return value
+
+    @model_validator(mode="after")
+    def validate_production_configuration(self) -> "Settings":
+        if self.environment.strip().lower() != "production":
+            return self
+        if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+            raise ValueError("Production requires a PostgreSQL DATABASE_URL")
+        try:
+            database_query = parse_qs(urlsplit(self.database_url).query)
+        except ValueError as exc:
+            raise ValueError("Production DATABASE_URL is invalid") from exc
+        if database_query.get("sslmode", [None])[-1] not in {
+            "require",
+            "verify-ca",
+            "verify-full",
+        }:
+            raise ValueError("Production DATABASE_URL must require TLS using sslmode")
+
+        origins = self.allowed_origins
+        if not origins:
+            raise ValueError("Production requires at least one HTTPS CORS origin")
+        for origin in origins:
+            try:
+                parsed = urlsplit(origin)
+                hostname = parsed.hostname
+                _ = parsed.port
+            except ValueError as exc:
+                raise ValueError("Production CORS origins must be valid HTTPS origins") from exc
+            try:
+                loopback = bool(hostname and ipaddress.ip_address(hostname).is_loopback)
+            except ValueError:
+                loopback = False
+            if (
+                parsed.scheme != "https"
+                or not hostname
+                or parsed.username
+                or parsed.password
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or hostname.lower() == "localhost"
+                or hostname.lower().endswith(".localhost")
+                or loopback
+            ):
+                raise ValueError(
+                    "Production CORS origins must be exact HTTPS origins without credentials, "
+                    "paths, or localhost"
+                )
+        return self
 
     @property
     def allowed_origins(self) -> list[str]:
