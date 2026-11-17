@@ -1,8 +1,33 @@
 import ipaddress
 from functools import lru_cache
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class MonitoredAwsAccount(BaseModel):
+    account_id: str = Field(pattern=r"^\d{12}$")
+    name: str = Field(min_length=1, max_length=128)
+    role_arn: str | None = None
+    external_id: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def validate_role(self) -> "MonitoredAwsAccount":
+        if self.role_arn is not None:
+            parts = self.role_arn.split(":", 5)
+            if (
+                len(parts) != 6
+                or parts[0] != "arn"
+                or parts[1] not in {"aws", "aws-us-gov", "aws-cn"}
+                or parts[2] != "iam"
+                or parts[4] != self.account_id
+                or not parts[5].startswith("role/")
+                or len(parts[5]) == len("role/")
+            ):
+                raise ValueError("role_arn must be an IAM role ARN in the configured account")
+        elif self.external_id is not None:
+            raise ValueError("external_id requires role_arn")
+        return self
 
 
 class Settings(BaseSettings):
@@ -16,6 +41,7 @@ class Settings(BaseSettings):
     expected_iam_users: str = ""
     trusted_ip_cidrs: str = ""
     sensitive_resource_arns: str = ""
+    monitored_aws_accounts: list[MonitoredAwsAccount] = Field(default_factory=list)
 
     @field_validator("trusted_ip_cidrs")
     @classmethod
@@ -27,6 +53,16 @@ class Settings(BaseSettings):
                     ipaddress.ip_network(normalized, strict=False)
                 except ValueError as exc:
                     raise ValueError(f"Invalid trusted IP CIDR: {normalized}") from exc
+        return value
+
+    @field_validator("monitored_aws_accounts")
+    @classmethod
+    def validate_unique_aws_accounts(
+        cls, value: list[MonitoredAwsAccount]
+    ) -> list[MonitoredAwsAccount]:
+        account_ids = [account.account_id for account in value]
+        if len(account_ids) != len(set(account_ids)):
+            raise ValueError("MONITORED_AWS_ACCOUNTS cannot contain duplicate account IDs")
         return value
 
     @property

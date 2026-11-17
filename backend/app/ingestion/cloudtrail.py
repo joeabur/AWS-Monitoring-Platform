@@ -165,7 +165,13 @@ def normalize_cloudtrail_event(
     region = region.strip().lower()
 
     if guardduty_envelope:
-        event_id = detail.get("id") or detail.get("findingArn")
+        finding_id = detail.get("id") or detail.get("findingArn")
+        updated_at = detail.get("updatedAt")
+        event_id = (
+            f"{finding_id}:{updated_at}"
+            if isinstance(finding_id, str) and isinstance(updated_at, str)
+            else finding_id
+        )
     elif config_envelope:
         event_id = envelope.get("id") or detail.get("eventId")
     else:

@@ -21,6 +21,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      MONITORED_AWS_ACCOUNTS: "${MONITORED_AWS_ACCOUNTS:-[]}"
     depends_on:
       db:
         condition: service_healthy
