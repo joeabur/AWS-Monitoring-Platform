@@ -1,6 +1,6 @@
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.detections.engine import DetectionMatch, evaluate_event
 from app.incidents.correlation import attach_alert_to_incident
 from app.ingestion.cloudtrail import normalize_cloudtrail_event
-from app.models import CloudTrailEvent, DetectionAlert
+from app.models import AwsFinding, CloudTrailEvent, DetectionAlert
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,159 @@ class IngestResult:
     event: CloudTrailEvent
     duplicate: bool
     alerts: tuple[DetectionAlert, ...] = ()
+
+
+def _finding_status(provider: str, details: dict[str, object]) -> tuple[str, str | None, str]:
+    finding = details.get("finding")
+    finding_data = finding if isinstance(finding, dict) else {}
+    if provider == "config":
+        evaluation = details.get("newEvaluationResult")
+        compliance = evaluation.get("complianceType") if isinstance(evaluation, dict) else None
+        status_value = str(compliance or "unknown").lower()
+        title = str(details.get("configRuleName") or "AWS Config compliance evaluation")
+        return status_value, None, title
+
+    workflow = finding_data.get("workflow", {})
+    record_state = finding_data.get("recordState")
+    workflow_status = workflow.get("status") if isinstance(workflow, dict) else None
+    status_value = str(workflow_status or record_state or "active").lower()
+    title = str(finding_data.get("title") or details.get("title") or "AWS security finding")
+    severity_data = finding_data.get("severity")
+    if provider == "guardduty":
+        try:
+            score = float(severity_data)
+        except (TypeError, ValueError):
+            return status_value, None, title
+        severity = (
+            "critical"
+            if score >= 9
+            else "high"
+            if score >= 7
+            else "medium"
+            if score >= 4
+            else "low"
+        )
+        return status_value, severity, title
+
+    if isinstance(severity_data, dict):
+        label = severity_data.get("label")
+        if isinstance(label, str):
+            return status_value, label.lower(), title
+        normalized = severity_data.get("normalized")
+        try:
+            score = float(normalized)
+        except (TypeError, ValueError):
+            return status_value, None, title
+        severity = (
+            "critical"
+            if score >= 90
+            else "high"
+            if score >= 70
+            else "medium"
+            if score >= 40
+            else "low"
+        )
+        return status_value, severity, title
+    return status_value, None, title
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _upsert_aws_finding(db: Session, event: CloudTrailEvent) -> None:
+    provider = {
+        "guardduty.amazonaws.com": "guardduty",
+        "securityhub.amazonaws.com": "securityhub",
+        "config.amazonaws.com": "config",
+    }.get(event.event_source)
+    if provider is None:
+        return
+
+    details = event.event_details
+    finding = details.get("finding")
+    finding_data = finding if isinstance(finding, dict) else {}
+    external_id = finding_data.get("id") or details.get("id")
+    if provider == "config":
+        external_id = f"{details.get('configRuleName', '')}:{details.get('resourceId', '')}"
+    if not isinstance(external_id, str) or not external_id:
+        return
+
+    status_value, severity, title = _finding_status(provider, details)
+    updated_at = event.event_time
+    if isinstance(finding_data.get("updatedAt"), str):
+        try:
+            parsed_updated_at = datetime.fromisoformat(finding_data["updatedAt"])
+            if parsed_updated_at.tzinfo is not None and parsed_updated_at.utcoffset() is not None:
+                updated_at = parsed_updated_at.astimezone(UTC)
+        except ValueError:
+            pass
+    created_at = event.event_time
+    if isinstance(finding_data.get("createdAt"), str):
+        try:
+            parsed_created_at = datetime.fromisoformat(finding_data["createdAt"])
+            if parsed_created_at.tzinfo is not None and parsed_created_at.utcoffset() is not None:
+                created_at = parsed_created_at.astimezone(UTC)
+        except ValueError:
+            pass
+
+    record = db.scalar(
+        select(AwsFinding)
+        .where(
+            AwsFinding.provider == provider,
+            AwsFinding.account_id == event.account_id,
+            AwsFinding.region == event.region,
+            AwsFinding.external_finding_id == external_id,
+        )
+        .with_for_update()
+    )
+    if record is None:
+        record = AwsFinding(
+            provider=provider,
+            external_finding_id=external_id,
+            account_id=event.account_id,
+            region=event.region,
+            title=title[:512],
+            severity=severity,
+            status=status_value[:32],
+            resource_arns=list(event.resource_arns),
+            first_observed_at=created_at,
+            last_observed_at=event.event_time,
+            last_updated_at=updated_at,
+            latest_event_id=event.id,
+        )
+        try:
+            with db.begin_nested():
+                db.add(record)
+                db.flush()
+        except IntegrityError:
+            record = db.scalar(
+                select(AwsFinding)
+                .where(
+                    AwsFinding.provider == provider,
+                    AwsFinding.account_id == event.account_id,
+                    AwsFinding.region == event.region,
+                    AwsFinding.external_finding_id == external_id,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                raise
+    if _utc_datetime(record.last_updated_at) <= _utc_datetime(updated_at):
+        record.title = title[:512]
+        record.severity = severity
+        record.status = status_value[:32]
+        record.last_updated_at = _utc_datetime(updated_at)
+        record.resource_arns = list(event.resource_arns)
+        record.latest_event_id = event.id
+    record.first_observed_at = min(
+        _utc_datetime(record.first_observed_at), _utc_datetime(created_at)
+    )
+    record.last_observed_at = max(
+        _utc_datetime(record.last_observed_at), _utc_datetime(event.event_time)
+    )
 
 
 def _update_alert(
@@ -134,6 +287,7 @@ def ingest_cloudtrail_event(
     db.add(record)
     try:
         db.flush()
+        _upsert_aws_finding(db, record)
         context = list(
             db.scalars(
                 select(CloudTrailEvent)

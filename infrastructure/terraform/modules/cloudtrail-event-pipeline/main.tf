@@ -34,6 +34,32 @@ resource "aws_cloudwatch_event_rule" "cloudtrail_management" {
   })
 }
 
+resource "aws_cloudwatch_event_rule" "service_findings" {
+  for_each = {
+    guardduty = {
+      source      = "aws.guardduty"
+      detail_type = "GuardDuty Finding"
+    }
+    securityhub = {
+      source      = "aws.securityhub"
+      detail_type = "Security Hub Findings - Imported"
+    }
+    config = {
+      source      = "aws.config"
+      detail_type = "Config Rules Compliance Change"
+    }
+  }
+
+  name           = "${var.name_prefix}-${each.key}-findings"
+  event_bus_name = var.event_bus_name
+  description    = "Route selected-account ${each.key} findings to the monitoring queue."
+  event_pattern = jsonencode({
+    account       = var.monitored_account_ids
+    source        = [each.value.source]
+    "detail-type" = [each.value.detail_type]
+  })
+}
+
 data "aws_iam_policy_document" "events_queue" {
   statement {
     sid       = "AllowMatchingEventBridgeRule"
@@ -49,7 +75,10 @@ data "aws_iam_policy_document" "events_queue" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [aws_cloudwatch_event_rule.cloudtrail_management.arn]
+      values = concat(
+        [aws_cloudwatch_event_rule.cloudtrail_management.arn],
+        [for rule in aws_cloudwatch_event_rule.service_findings : rule.arn]
+      )
     }
   }
 }
@@ -69,7 +98,10 @@ data "aws_iam_policy_document" "delivery_dlq" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [aws_cloudwatch_event_rule.cloudtrail_management.arn]
+      values = concat(
+        [aws_cloudwatch_event_rule.cloudtrail_management.arn],
+        [for rule in aws_cloudwatch_event_rule.service_findings : rule.arn]
+      )
     }
   }
 }
@@ -88,6 +120,25 @@ resource "aws_cloudwatch_event_target" "events_queue" {
   rule           = aws_cloudwatch_event_rule.cloudtrail_management.name
   event_bus_name = var.event_bus_name
   target_id      = "cloudtrail-sqs"
+  arn            = aws_sqs_queue.events.arn
+  depends_on     = [aws_sqs_queue_policy.events, aws_sqs_queue_policy.delivery_dlq]
+
+  dead_letter_config {
+    arn = aws_sqs_queue.delivery_dlq.arn
+  }
+
+  retry_policy {
+    maximum_event_age_in_seconds = 86400
+    maximum_retry_attempts       = 185
+  }
+}
+
+resource "aws_cloudwatch_event_target" "service_findings" {
+  for_each = aws_cloudwatch_event_rule.service_findings
+
+  rule           = each.value.name
+  event_bus_name = var.event_bus_name
+  target_id      = "${each.key}-sqs"
   arn            = aws_sqs_queue.events.arn
   depends_on     = [aws_sqs_queue_policy.events, aws_sqs_queue_policy.delivery_dlq]
 

@@ -82,6 +82,16 @@ def _is_successful_console_without_mfa(event: CloudTrailEvent) -> bool:
     )
 
 
+def _is_active_securityhub_finding(finding: dict[str, Any]) -> bool:
+    workflow = finding.get("workflow", {})
+    workflow_status = workflow.get("status") if isinstance(workflow, dict) else None
+    record_state = finding.get("recordState")
+    return (
+        str(workflow_status or "").upper() not in {"RESOLVED", "SUPPRESSED"}
+        and str(record_state or "").upper() != "ARCHIVED"
+    )
+
+
 def _is_escalation_api(event: CloudTrailEvent) -> bool:
     return (
         event.error_code is None
@@ -384,6 +394,22 @@ def _matches(
             1,
             (event.cloudtrail_event_id,),
         )
+    if rule.condition == "securityhub_high_finding":
+        finding = detail.get("finding", {})
+        if not isinstance(finding, dict) or not _is_active_securityhub_finding(finding):
+            return False, 1, (event.cloudtrail_event_id,)
+        severity = finding.get("severity", {}) if isinstance(finding, dict) else {}
+        label = severity.get("label") if isinstance(severity, dict) else None
+        normalized = severity.get("normalized") if isinstance(severity, dict) else None
+        try:
+            high = label in {"HIGH", "CRITICAL"} or float(normalized) >= 70
+        except (TypeError, ValueError):
+            high = label in {"HIGH", "CRITICAL"}
+        return (
+            event.event_source == "securityhub.amazonaws.com" and high,
+            1,
+            (event.cloudtrail_event_id,),
+        )
     if rule.condition == "suspicious_role_assumption":
         configured = _csv_values(settings.trusted_ip_cidrs)
         role_arn = request.get("roleArn")
@@ -507,6 +533,20 @@ def evaluate_event(
                     risk_score = 95
             except (TypeError, ValueError):
                 pass
+        if rule.condition == "securityhub_high_finding":
+            finding = _detail(event).get("finding", {})
+            finding_severity = finding.get("severity", {}) if isinstance(finding, dict) else {}
+            label = finding_severity.get("label") if isinstance(finding_severity, dict) else None
+            normalized = (
+                finding_severity.get("normalized") if isinstance(finding_severity, dict) else None
+            )
+            try:
+                critical = label == "CRITICAL" or float(normalized) >= 90
+            except (TypeError, ValueError):
+                critical = label == "CRITICAL"
+            if critical:
+                severity = "critical"
+                risk_score = 95
         matches.append(
             DetectionMatch(
                 rule=rule,

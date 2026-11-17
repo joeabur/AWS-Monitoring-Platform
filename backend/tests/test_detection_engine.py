@@ -70,9 +70,9 @@ def match_rule(rule_id: str, current: CloudTrailEvent, context=None, config=None
     return results[0] if results else None
 
 
-def test_detection_inventory_has_fifteen_versioned_rules() -> None:
-    assert len(RULES) == 15
-    assert len({rule.rule_id for rule in RULES}) == 15
+def test_detection_inventory_has_sixteen_versioned_rules() -> None:
+    assert len(RULES) == 16
+    assert len({rule.rule_id for rule in RULES}) == 16
     assert all(rule.version >= 1 and 0 <= rule.risk_score <= 100 for rule in RULES)
 
 

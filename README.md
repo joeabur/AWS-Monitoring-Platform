@@ -31,9 +31,9 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 |---|---|
 | 1 — Foundation (complete) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
 | 2 — Ingestion (complete) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
-| 3 — Detection (complete) | 15 versioned rules, thresholds/correlation, persisted deduplicated alerts, explicit risk-score basis, rule test API and synthetic scenarios |
+| 3 — Detection (complete) | 15 initial rules plus high-severity Security Hub coverage; thresholds, persisted deduplicated alerts, explicit risk-score basis, and rule testing |
 | 4 — Incidents (complete) | Alert grouping, evidence and event timeline, incident lifecycle, assignment, notes, audit trail |
-| 5 — AWS integrations (in progress) | STS account health/region discovery and bounded GuardDuty sync implemented; Security Hub and AWS Config collectors remain |
+| 5 — AWS integrations (complete) | STS account health/region discovery; GuardDuty, Security Hub, and Config finding sync/status; EventBridge/SQS routing |
 | 6 — Operations UI and notifications | Real-event metrics, filters, Slack/Teams/email routing, delivery health |
 | 7 — Auditor integration | Schema-v1 JSON report import and correlation with current events |
 | 8 — Controlled response | Detection-only by default; dry-run, analyst approval, separate permissions, audited playbooks |
@@ -41,12 +41,12 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 
 ### MVP boundary
 
-The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with GuardDuty
-as the first enrichment source. Security Hub, Config, correlation with imported audit findings,
-notifications, and response automation follow only after the ingestion and incident contracts are
-stable. Phases 1–3 deliberately contain no direct AWS polling, live AWS connection, or mock
-dashboard counts. The initial UI reports actual API/database health and explicitly says when
-monitoring is not yet connected. The synthetic generator creates clearly marked local records.
+The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with bounded
+GuardDuty, Security Hub, and Config collection. Auditor-report correlation, notifications, and
+response automation follow after the ingestion and incident contracts are stable. Phases 1–3
+deliberately contain no direct AWS polling, live AWS connection, or mock dashboard counts. The
+initial UI reports actual API/database health and the synthetic generator creates clearly marked
+local records.
 
 ## Milestones and acceptance criteria
 
@@ -70,8 +70,8 @@ monitoring is not yet connected. The synthetic generator creates clearly marked 
 
 ### Phase 3 — Detection engineering (complete)
 
-- [x] Versioned detection library covers 15 AWS activity and exposure scenarios, with MITRE
-  mappings where applicable.
+- [x] Versioned detection library covers the initial 15 AWS activity and exposure scenarios, with
+  MITRE mappings where applicable; high/critical Security Hub findings also generate alerts.
 - [x] Evaluate new events during ingestion; thresholded failures correlate within documented
   windows and by source/principal where appropriate.
 - [x] Persist deduplicated alerts with evidence-event references, relative risk score explanation,
@@ -101,14 +101,21 @@ versioned as code.
 - [x] Require Administrator or Security Analyst authorization for incident mutations; viewers retain
   read-only access. Every analyst mutation is recorded in the incident audit trail.
 
-### Phase 5 — AWS integrations (in progress)
+### Phase 5 — AWS integrations (complete)
 
 - [x] Configure multiple monitored accounts without storing AWS credentials; role assumption uses
   temporary STS credentials, optional external IDs, and the local AWS credential chain.
 - [x] Add STS identity validation, enabled-region discovery, and bounded GuardDuty finding sync with
   SDK retries, pagination, account/region validation, and idempotent event ingestion.
-- [ ] Add persistent integration health records, Security Hub finding synchronization, and AWS
-  Config rule/compliance collection.
+- [x] Synchronize bounded Security Hub findings and AWS Config compliant/non-compliant evaluations
+  into the normalized event pipeline; high/critical Security Hub and relevant Config drift generate
+  alerts.
+- [x] Persist deduplicated GuardDuty, Security Hub, and Config finding snapshots; newer provider
+  timestamps update status without older updates overwriting them.
+- [x] Persist integration health and expose account/service status plus searchable, paginated
+  findings.
+- [x] Route CloudTrail management events and GuardDuty, Security Hub, and Config findings through
+  the opt-in EventBridge/SQS module with delivery and processing DLQs.
 
 ## Repository layout
 
@@ -118,7 +125,7 @@ backend/
     api/                 Versioned API routes and authentication
     core/                Settings and token/password security
     ingestion/           CloudTrail normalization, persistence, and SQS worker
-    integrations/        Read-only AWS STS and GuardDuty clients
+    integrations/        Read-only AWS STS, GuardDuty, Security Hub, and Config clients
     incidents/           Alert correlation and incident lifecycle services
     detections/          Versioned rule catalog, correlation, and evaluator
     models/              SQLAlchemy entities
@@ -155,9 +162,9 @@ After Compose is running, create the first administrator interactively:
 docker compose exec api python -m app.scripts.create_admin
 ```
 
-The dashboard currently reports application/database health only; AWS accounts are not connected.
-Phase 2 events can be populated locally with synthetic-only data, which can generate alerts and
-incidents:
+The dashboard currently reports application/database health only; it does not yet render AWS
+account or event metrics. Configure AWS accounts to use the authenticated sync APIs. Phase 2 events
+can also be populated locally with synthetic-only data, which can generate alerts and incidents:
 
 ```bash
 docker compose exec api python -m app.scripts.generate_sample_events --count 8
@@ -186,9 +193,11 @@ container.
 
 The external ID is treated as a secret and account APIs never return role ARNs or external IDs.
 The application assumes the role per request; temporary credentials are not persisted. The
-monitored role currently needs `sts:GetCallerIdentity`, `ec2:DescribeRegions`, and the GuardDuty
-`ListDetectors`, `ListFindings`, and `GetFindings` read actions. Scope GuardDuty actions to detector
-resources where supported by the target AWS partition's service-authorization reference. The trust
+monitored role currently needs `sts:GetCallerIdentity`, `ec2:DescribeRegions`, GuardDuty
+`ListDetectors`, `ListFindings`, and `GetFindings`, Security Hub `GetFindings`, and AWS Config
+`DescribeComplianceByConfigRule` and `GetComplianceDetailsByConfigRule` read actions. Scope service
+actions to resources where supported by the target AWS partition's service-authorization reference.
+The trust
 policy should allow `sts:AssumeRole` only from the platform's collector identity and require the
 configured external ID. These permissions are for monitoring only; no response/write actions are
 included.
@@ -212,7 +221,10 @@ restrict resources where supported):
       "Action": [
         "guardduty:ListDetectors",
         "guardduty:ListFindings",
-        "guardduty:GetFindings"
+        "guardduty:GetFindings",
+        "securityhub:GetFindings",
+        "config:DescribeComplianceByConfigRule",
+        "config:GetComplianceDetailsByConfigRule"
       ],
       "Resource": "*"
     }
@@ -239,12 +251,15 @@ same external ID configured above:
 }
 ```
 
-`GET /api/v1/accounts/{account_id}/health` verifies the returned AWS account identity and discovers
-enabled regions. `POST /api/v1/accounts/{account_id}/sync/guardduty` is an authenticated, analyst-
-or administrator-only, bounded synchronization operation (up to 50 findings per call); it is for
-testing and controlled collection, not a replacement for continuous EventBridge/SQS delivery.
-AWS calls use standard SDK retry/backoff behavior. This integration is mock-tested only and has not
-been exercised against a live AWS account. Security Hub and Config collection are still pending.
+`GET /api/v1/accounts/{account_id}/health` verifies the returned AWS account identity, discovers
+enabled regions, and reports persisted STS and service-sync health. Each `/sync/{service}` endpoint
+is an authenticated, analyst- or administrator-only, bounded synchronization operation (up to 50
+findings/evaluations per call); these support controlled collection and backfill alongside
+continuous EventBridge/SQS delivery. `GET /api/v1/findings` returns paginated provider status and
+resource summaries, with filters for account, region, provider, severity, status, title, and
+observation time. Newer provider updates replace status; out-of-order older updates cannot roll a
+finding back. AWS calls use standard SDK retry/backoff behavior. These integrations are mock-tested
+only and have not been exercised against a live AWS account.
 
 Ingest or query normalized events using the authenticated API:
 
@@ -263,13 +278,17 @@ PUT  /api/v1/incidents/{incident_id}/assignment
 POST /api/v1/incidents/{incident_id}/notes
 GET  /api/v1/accounts
 GET  /api/v1/accounts/{account_id}/health
+GET  /api/v1/findings?provider=guardduty&severity=high&limit=50&offset=0
 POST /api/v1/accounts/{account_id}/sync/guardduty?region=us-east-1&limit=25
+POST /api/v1/accounts/{account_id}/sync/security-hub?region=us-east-1&limit=25
+POST /api/v1/accounts/{account_id}/sync/config?region=us-east-1&limit=25
 ```
 
 The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
 Administrator or Security Analyst token. Read access requires authentication. The local synthetic
 generator inserts into the configured database and marks records as synthetic; do not confuse those
-records with AWS telemetry.
+records with AWS telemetry. Security Hub EventBridge `detail.findings` arrays are split into
+idempotent per-finding events by both the API and SQS worker.
 
 Newly ingested events are evaluated against the rule library and can create or update an alert in
 the same database transaction. Replays of the same AWS event do not re-evaluate or duplicate its
@@ -280,9 +299,10 @@ window. Rule test requests do not store the submitted event or produce alerts.
 Rules that need an expected-user, trusted-CIDR, or sensitive-resource list stay disabled while the
 corresponding `.env` value is empty. Configure comma-separated values in `EXPECTED_IAM_USERS`,
 `TRUSTED_IP_CIDRS`, and `SENSITIVE_RESOURCE_ARNS`; invalid CIDRs fail configuration validation.
-GuardDuty findings and Config compliance notifications can be normalized and tested through the
-ingest API, but the Terraform SQS module currently routes CloudTrail management events only.
-Continuous EventBridge delivery for GuardDuty and Config still needs separate setup and verification.
+CloudTrail management events and GuardDuty, Security Hub, and AWS Config findings can be routed to
+the same SQS worker by the opt-in Terraform module. Cross-account event-bus forwarding and
+permissions must be configured separately. The module is not applied automatically and the
+delivery path has not been verified against a live AWS account.
 
 Incidents are created transactionally alongside detection alerts. A repeated AWS event is
 idempotent; related alerts are attached to a recent active incident, while resolved incidents are
@@ -308,19 +328,18 @@ pip install -r backend/requirements-dev.txt
 cd backend && python -m pytest
 ```
 
-No AWS credentials are needed for tests. Live AWS collector deployment is not part of Phase 4.
+No AWS credentials are needed for tests. The default test suite does not connect to a live AWS
+account.
 
 ## AWS access, permissions, and cost approach
 
-Nothing in this milestone provisions or calls AWS. Future monitored accounts will grant a dedicated
-platform role to the collector account using an explicit trust relationship (external ID where
-appropriate); collection credentials will be temporary STS credentials. Local use will honor the
-AWS credential chain. Discovery and integrations will be separately scoped and read-only; likely
-read actions include `sts:GetCallerIdentity`, `ec2:DescribeRegions`, CloudTrail lookup/read APIs,
-GuardDuty list/get APIs, Security Hub finding reads, and AWS Config read APIs. Event delivery also
-requires narrowly scoped EventBridge target permissions and SQS queue resource policies. Exact
-actions will be generated from implemented calls and reviewed before publishing a policy. No
-response permissions will be combined with monitoring permissions.
+No AWS resources are provisioned automatically. When AWS integrations are configured, collection
+uses the local boto3 credential chain or a dedicated platform role with explicit trust and temporary
+STS credentials. Discovery and collectors are read-only; required calls include
+`sts:GetCallerIdentity`, `sts:AssumeRole` (for cross-account collection), `ec2:DescribeRegions`,
+GuardDuty list/get APIs, Security Hub finding reads, and AWS Config compliance reads. Event delivery
+requires narrowly scoped EventBridge target permissions and SQS queue resource policies. No response
+permissions are combined with monitoring permissions.
 
 **Cost:** Local development and tests cost **$0 in AWS** (containers run locally); local
 compute/storage are outside AWS billing. The Terraform module is opt-in and not deployed. Future
@@ -340,9 +359,9 @@ future deployment is represented as a quote or included in this repository yet.
 - The API uses bearer tokens (no browser cookie session); production frontend hosting should use
   TLS and a reviewed token/session strategy.
 - Direct AWS event delivery/deployment has not been configured or verified in a real AWS account.
-  The Terraform module defines a queue/rule pattern; it is not a deployed AWS integration.
-- The detection engine generates alerts but does not manage incidents, analyst acknowledgements,
-  assignments, or investigation notes; those are Phase 4.
-- GuardDuty and Config EventBridge records can be normalized for detection, but no AWS delivery rule
-  for those sources has been deployed.
+  The Terraform module defines rules for CloudTrail, GuardDuty, Security Hub, and Config; it is not
+  a deployed AWS integration.
+- Integration health reflects the most recent AWS health check or manual service sync; finding
+  status reflects the newest provider update observed. Neither proves source services are
+  comprehensively configured or that no events were missed.
 - There are no notifications, response actions, or live detection dashboards yet.

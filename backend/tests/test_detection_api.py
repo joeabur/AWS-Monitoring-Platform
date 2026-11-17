@@ -88,7 +88,7 @@ def test_detection_inventory_and_test_endpoint_do_not_persist(client, db_session
     )
 
     assert inventory.status_code == 200
-    assert len(inventory.json()) == 15
+    assert len(inventory.json()) == 16
     assert tested.status_code == 200
     assert tested.json()["synthetic_test"] is True
     assert tested.json()["results"][0]["matched"] is True
@@ -174,3 +174,32 @@ def test_noncompliant_config_event_generates_security_group_alert(client) -> Non
     assert len(response.json()["alert_ids"]) == 1
     alert = client.get(f"/api/v1/alerts/{response.json()['alert_ids'][0]}", headers=headers)
     assert alert.json()["alert"]["rule_id"] == "AWS-CT-009"
+
+
+def test_resolved_securityhub_finding_does_not_generate_alert(client) -> None:
+    headers = bearer(client)
+    finding = {
+        "version": "0",
+        "id": "resolved-securityhub-finding",
+        "detail-type": "Security Hub Findings - Imported",
+        "source": "aws.securityhub",
+        "account": "111122223333",
+        "time": "2026-03-01T12:00:00Z",
+        "region": "us-east-1",
+        "detail": {
+            "id": "resolved-securityhub-finding",
+            "accountId": "111122223333",
+            "region": "us-east-1",
+            "title": "Previously resolved critical finding",
+            "createdAt": "2026-03-01T11:00:00Z",
+            "updatedAt": "2026-03-01T12:00:00Z",
+            "recordState": "ACTIVE",
+            "workflow": {"status": "RESOLVED"},
+            "severity": {"label": "CRITICAL", "normalized": 95},
+        },
+    }
+
+    response = client.post("/api/v1/events/ingest", json=finding, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["alert_ids"] == []

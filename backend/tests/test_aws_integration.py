@@ -9,6 +9,7 @@ from app.integrations.aws import (
     AwsIntegrationError,
     AwsIntegrationService,
     build_guardduty_envelope,
+    build_securityhub_envelope,
 )
 
 
@@ -196,6 +197,99 @@ def test_guardduty_findings_are_paginated_and_context_is_checked() -> None:
         raise AssertionError("Cross-account findings must be rejected")
 
 
+def test_securityhub_finding_pages_and_normalizes_severity_and_resource() -> None:
+    account = MonitoredAwsAccount(account_id="111122223333", name="production")
+    securityhub_pages = iter(
+        (
+            {
+                "Findings": [
+                    {
+                        "Id": "finding-1",
+                        "AwsAccountId": account.account_id,
+                        "Region": "us-east-1",
+                        "Title": "Public bucket exposure",
+                        "CreatedAt": "2026-03-01T12:00:00Z",
+                        "UpdatedAt": "2026-03-01T12:05:00Z",
+                        "Severity": {"Label": "CRITICAL", "Normalized": 95},
+                        "Resources": [{"Id": "arn:aws:s3:::example", "Type": "AwsS3Bucket"}],
+                    }
+                ],
+                "NextToken": "next-page",
+            },
+            {"Findings": [{"Id": "finding-2", "AwsAccountId": account.account_id}]},
+        )
+    )
+    session = FakeSession(
+        sts=FakeClient(get_caller_identity=lambda: {"Account": account.account_id}),
+        securityhub=FakeClient(get_findings=lambda **_: next(securityhub_pages)),
+    )
+    service = AwsIntegrationService(session_factory=lambda **_: session)
+
+    findings = service.securityhub_findings(account, "us-east-1", 2)
+    envelope = build_securityhub_envelope(findings[0], account, "us-east-1")
+    normalized = normalize_cloudtrail_event(envelope)
+
+    assert len(findings) == 2
+    assert normalized["event_source"] == "securityhub.amazonaws.com"
+    assert normalized["event_time"].isoformat() == "2026-03-01T12:05:00+00:00"
+    assert normalized["resource_arns"] == ["arn:aws:s3:::example"]
+    assert normalized["event_details"]["finding"]["severity"]["label"] == "CRITICAL"
+
+
+def test_config_collector_maps_noncompliant_resource_to_event() -> None:
+    account = MonitoredAwsAccount(account_id="111122223333", name="production")
+    config = FakeClient(
+        describe_compliance_by_config_rule=lambda **_: {
+            "ComplianceByConfigRules": [
+                {
+                    "ConfigRuleName": "restricted-ssh",
+                    "Compliance": {"ComplianceType": "NON_COMPLIANT"},
+                },
+                {
+                    "ConfigRuleName": "encrypted-volumes",
+                    "Compliance": {"ComplianceType": "COMPLIANT"},
+                },
+            ]
+        },
+        get_compliance_details_by_config_rule=lambda ConfigRuleName, **_: {
+            "EvaluationResults": [
+                {
+                    "EvaluationResultIdentifier": {
+                        "EvaluationResultQualifier": {
+                            "ConfigRuleName": ConfigRuleName,
+                            "ResourceType": "AWS::EC2::SecurityGroup",
+                            "ResourceId": "sg-1234",
+                        },
+                        "OrderingTimestamp": datetime(2026, 3, 1, tzinfo=UTC),
+                    },
+                    "ComplianceType": (
+                        "NON_COMPLIANT" if ConfigRuleName == "restricted-ssh" else "COMPLIANT"
+                    ),
+                }
+            ]
+        },
+    )
+    session = FakeSession(
+        sts=FakeClient(get_caller_identity=lambda: {"Account": account.account_id}),
+        config=config,
+    )
+    service = AwsIntegrationService(session_factory=lambda **_: session)
+
+    envelopes = service.config_compliance_events(account, "us-east-1", 5)
+    normalized = [normalize_cloudtrail_event(envelope) for envelope in envelopes]
+
+    assert len(envelopes) == 2
+    assert normalized[0]["event_source"] == "config.amazonaws.com"
+    assert normalized[0]["event_name"] == "Config Rules Compliance Change"
+    assert (
+        normalized[0]["event_details"]["newEvaluationResult"]["complianceType"] == "NON_COMPLIANT"
+    )
+    assert normalized[1]["event_details"]["newEvaluationResult"]["complianceType"] == "COMPLIANT"
+    assert normalized[0]["resource_arns"] == [
+        "arn:aws:ec2:us-east-1:111122223333:security-group/sg-1234"
+    ]
+
+
 def test_account_api_hides_role_details_and_ingests_guardduty(client, monkeypatch) -> None:
     account = MonitoredAwsAccount(
         account_id="111122223333",
@@ -221,6 +315,48 @@ def test_account_api_hides_role_details_and_ingests_guardduty(client, monkeypatc
         ) -> list[dict[str, Any]]:
             return [finding]
 
+        def securityhub_findings(
+            self, _: MonitoredAwsAccount, __: str, ___: int
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "Id": "securityhub-finding-api",
+                    "AwsAccountId": account.account_id,
+                    "Region": "us-east-1",
+                    "Title": "Sensitive resource finding",
+                    "CreatedAt": "2026-03-01T12:00:00Z",
+                    "UpdatedAt": "2026-03-01T12:05:00Z",
+                    "Severity": {"Label": "HIGH", "Normalized": 75},
+                    "Resources": [{"Id": "arn:aws:s3:::sensitive-demo"}],
+                }
+            ]
+
+        def config_compliance_events(
+            self, _: MonitoredAwsAccount, __: str, ___: int
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "version": "0",
+                    "id": "config-finding-api",
+                    "detail-type": "Config Rules Compliance Change",
+                    "source": "aws.config",
+                    "account": account.account_id,
+                    "time": "2026-03-01T12:00:00Z",
+                    "region": "us-east-1",
+                    "detail": {
+                        "awsAccountId": account.account_id,
+                        "awsPartition": "aws",
+                        "awsRegion": "us-east-1",
+                        "configRuleName": "restricted-ssh",
+                        "messageType": "Config Rules Compliance Change",
+                        "notificationCreationTime": "2026-03-01T12:00:00Z",
+                        "resourceId": "sg-api",
+                        "resourceType": "AWS::EC2::SecurityGroup",
+                        "newEvaluationResult": {"complianceType": "NON_COMPLIANT"},
+                    },
+                }
+            ]
+
     monkeypatch.setattr(
         "app.api.accounts.get_settings",
         lambda: Settings(monitored_aws_accounts=[account]),
@@ -234,6 +370,16 @@ def test_account_api_hides_role_details_and_ingests_guardduty(client, monkeypatc
         "/api/v1/accounts/111122223333/sync/guardduty?region=us-east-1",
         headers=headers,
     )
+    securityhub = client.post(
+        "/api/v1/accounts/111122223333/sync/security-hub?region=us-east-1",
+        headers=headers,
+    )
+    config = client.post(
+        "/api/v1/accounts/111122223333/sync/config?region=us-east-1",
+        headers=headers,
+    )
+    health_after_sync = client.get("/api/v1/accounts/111122223333/health", headers=headers)
+    findings = client.get("/api/v1/findings?limit=20", headers=headers)
     viewer = client.post(
         "/api/v1/accounts/111122223333/sync/guardduty?region=us-east-1",
         headers=_bearer(client, "viewer@example.com"),
@@ -253,7 +399,69 @@ def test_account_api_hides_role_details_and_ingests_guardduty(client, monkeypatc
     assert synced.json()["fetched"] == 1
     assert synced.json()["ingested"] == 1
     assert synced.json()["alert_ids"]
+    assert securityhub.status_code == config.status_code == 200
+    assert securityhub.json()["alert_ids"]
+    assert config.json()["alert_ids"]
+    assert findings.status_code == 200
+    finding_items = findings.json()["items"]
+    assert {item["provider"] for item in finding_items} == {
+        "guardduty",
+        "securityhub",
+        "config",
+    }
+    assert health_after_sync.status_code == 200
+    assert {item["integration"] for item in health_after_sync.json()["integrations"]} == {
+        "sts",
+        "guardduty",
+        "securityhub",
+        "config",
+    }
     assert viewer.status_code == 403
+
+
+def test_finding_updates_ignore_out_of_order_status_changes(client) -> None:
+    headers = _bearer(client)
+    findings = [
+        {
+            "Id": "securityhub-versioned-finding",
+            "AwsAccountId": "111122223333",
+            "Region": "us-east-1",
+            "Title": "Sensitive resource finding",
+            "CreatedAt": "2026-03-01T12:00:00Z",
+            "UpdatedAt": "2026-03-01T12:10:00Z",
+            "Workflow": {"Status": "RESOLVED"},
+            "Severity": {"Label": "HIGH", "Normalized": 75},
+        },
+        {
+            "Id": "securityhub-versioned-finding",
+            "AwsAccountId": "111122223333",
+            "Region": "us-east-1",
+            "Title": "Sensitive resource finding",
+            "CreatedAt": "2026-03-01T12:00:00Z",
+            "UpdatedAt": "2026-03-01T12:08:00Z",
+            "Workflow": {"Status": "NEW"},
+            "Severity": {"Label": "HIGH", "Normalized": 75},
+        },
+    ]
+    for finding in findings:
+        envelope = build_securityhub_envelope(
+            finding,
+            MonitoredAwsAccount(account_id="111122223333", name="production"),
+            "us-east-1",
+        )
+        response = client.post("/api/v1/events/ingest", json=envelope, headers=headers)
+        assert response.status_code == 200
+
+    response = client.get(
+        "/api/v1/findings?provider=securityhub&status=resolved",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    finding = response.json()["items"][0]
+    assert finding["status"] == "resolved"
+    assert finding["last_updated_at"] == "2026-03-01T12:10:00"
 
 
 def _bearer(client, email: str = "analyst@example.com") -> dict[str, str]:

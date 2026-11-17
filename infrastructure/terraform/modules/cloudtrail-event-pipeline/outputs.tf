@@ -22,3 +22,8 @@ output "event_rule_arn" {
   description = "EventBridge rule ARN for monitoring and alarms."
   value       = aws_cloudwatch_event_rule.cloudtrail_management.arn
 }
+
+output "service_finding_rule_arns" {
+  description = "EventBridge rule ARNs for GuardDuty, Security Hub, and AWS Config findings."
+  value       = { for name, rule in aws_cloudwatch_event_rule.service_findings : name => rule.arn }
+}

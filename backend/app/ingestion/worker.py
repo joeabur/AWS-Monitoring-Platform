@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.database import get_session_factory
-from app.ingestion.cloudtrail import EventNormalizationError
+from app.ingestion.cloudtrail import EventNormalizationError, expand_securityhub_event
 from app.ingestion.service import ingest_cloudtrail_event
 
 logger = logging.getLogger(__name__)
@@ -37,15 +37,16 @@ def lambda_handler(event: dict[str, Any], _: object) -> dict[str, list[dict[str,
                 raise EventNormalizationError("SQS message body must be a JSON object")
             session = get_session_factory()()
             try:
-                result = ingest_cloudtrail_event(session, body)
+                envelopes = expand_securityhub_event(body)
+                results = [ingest_cloudtrail_event(session, envelope) for envelope in envelopes]
             finally:
                 session.close()
             logger.info(
-                "Processed CloudTrail SQS message",
+                "Processed AWS security event SQS message",
                 extra={
                     "message_id": message_id,
-                    "event_id": result.event.cloudtrail_event_id,
-                    "duplicate": result.duplicate,
+                    "event_ids": [result.event.cloudtrail_event_id for result in results],
+                    "duplicate_count": sum(result.duplicate for result in results),
                 },
             )
         except (KeyError, json.JSONDecodeError, EventNormalizationError, SQLAlchemyError):

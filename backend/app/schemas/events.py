@@ -34,6 +34,12 @@ class EventIngestResponse(BaseModel):
     alert_ids: list[UUID]
 
 
+class EventIngestBatchResponse(BaseModel):
+    events: list[CloudTrailEventRead]
+    duplicate_count: int
+    alert_ids: list[UUID]
+
+
 class EventPage(BaseModel):
     items: list[CloudTrailEventRead]
     total: int

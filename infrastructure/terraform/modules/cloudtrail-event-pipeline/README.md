@@ -1,10 +1,10 @@
 # CloudTrail EventBridge and SQS module
 
-This opt-in regional module routes CloudTrail management events for an explicit list of AWS account
-IDs to an encrypted SQS queue. A processing DLQ captures messages rejected by the worker after the
-configured receive count; a separate delivery DLQ captures EventBridge target delivery failures.
-The rule is scoped by account and `detail.eventCategory=Management`. CloudTrail data events are not
-selected by this module.
+This opt-in regional module routes CloudTrail management events and GuardDuty, Security Hub, and
+AWS Config findings for an explicit list of AWS account IDs to an encrypted SQS queue. A processing
+DLQ captures messages rejected by the worker after the configured receive count; a separate
+delivery DLQ captures EventBridge target delivery failures. Rules are scoped by account and source.
+CloudTrail data events are not selected by this module.
 
 The queue is intended for a worker image built from `backend/Dockerfile.worker`, whose handler is
 `app.ingestion.worker.lambda_handler`. Configure the Lambda SQS event-source mapping with
@@ -18,9 +18,8 @@ network access to PostgreSQL. The worker does not need `JWT_SECRET_KEY`. Grant t
 role or deploy a Lambda.
 
 No root module calls this module automatically. The caller must use an appropriately scoped AWS
-provider in the target region and pass account IDs intentionally. Review EventBridge event coverage
-and service-specific event shapes before deployment. CloudTrail must be enabled and configured to
-deliver the desired management events.
+provider in the target region and pass account IDs intentionally. Review EventBridge event coverage and service-specific event shapes before deployment. CloudTrail,
+GuardDuty, Security Hub, and AWS Config must be enabled and configured in the source account/region.
 This module matches events already available on its configured event bus; cross-account event-bus
 forwarding and permissions must be configured separately when monitoring other accounts.
 

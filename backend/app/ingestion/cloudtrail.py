@@ -89,6 +89,50 @@ def _event_time(value: Any) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _lower_camel_key(value: str) -> str:
+    if value.isupper():
+        return value.lower()
+    acronym = re.match(r"^([A-Z]+)(?=[A-Z][a-z]|$)", value)
+    if acronym:
+        prefix = acronym.group(1)
+        return prefix.lower() + value[len(prefix) :]
+    return value[:1].lower() + value[1:]
+
+
+def _eventbridge_shape(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            _lower_camel_key(str(key)): _eventbridge_shape(child) for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_eventbridge_shape(child) for child in value]
+    return value
+
+
+def expand_securityhub_event(event: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Split the Security Hub EventBridge findings array into individual finding envelopes."""
+    if event.get("source") != "aws.securityhub" or event.get("detail-type") not in {
+        "Security Hub Findings - Imported",
+        "Security Hub Findings - Custom Action",
+    }:
+        return [dict(event)]
+
+    detail = event.get("detail")
+    if not isinstance(detail, Mapping):
+        raise EventNormalizationError("Security Hub EventBridge detail must be an object")
+    findings = detail.get("findings")
+    if findings is None:
+        return [dict(event)]
+    if not isinstance(findings, list):
+        raise EventNormalizationError("Security Hub EventBridge findings must be a list")
+    envelopes: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            raise EventNormalizationError("Every Security Hub finding must be an object")
+        envelopes.append({**event, "detail": dict(finding)})
+    return envelopes
+
+
 def _identity(data: Mapping[str, Any]) -> Mapping[str, Any]:
     identity = data.get("userIdentity", {})
     if not isinstance(identity, Mapping):
@@ -107,6 +151,9 @@ def _resources(data: Mapping[str, Any]) -> list[str]:
         if not isinstance(resource, Mapping):
             continue
         arn = resource.get("ARN") or resource.get("arn")
+        resource_id = resource.get("id")
+        if not arn and isinstance(resource_id, str) and resource_id.startswith("arn:"):
+            arn = resource_id
         if isinstance(arn, str) and arn:
             arns.append(arn[:2048])
     finding_resource = data.get("resource")
@@ -124,9 +171,37 @@ def _resources(data: Mapping[str, Any]) -> list[str]:
             and isinstance(data.get("region"), str)
             and isinstance(data.get("accountId"), str)
         ):
+            partition = data.get("awsPartition", "aws")
             arns.append(
-                f"arn:aws:ec2:{data['region']}:{data['accountId']}:instance/{instance_id}"[:2048]
+                f"arn:{partition}:ec2:{data['region']}:{data['accountId']}:instance/{instance_id}"[
+                    :2048
+                ]
             )
+    config_resource_type = data.get("resourceType")
+    config_resource_id = data.get("resourceId")
+    region = data.get("awsRegion") or data.get("region")
+    account_id = data.get("awsAccountId") or data.get("accountId")
+    partition = data.get("awsPartition", "aws")
+    if (
+        config_resource_type == "AWS::EC2::SecurityGroup"
+        and isinstance(config_resource_id, str)
+        and isinstance(region, str)
+        and isinstance(account_id, str)
+    ):
+        arns.append(
+            f"arn:{partition}:ec2:{region}:{account_id}:security-group/{config_resource_id}"[:2048]
+        )
+    elif (
+        config_resource_type == "AWS::EC2::Instance"
+        and isinstance(config_resource_id, str)
+        and isinstance(region, str)
+        and isinstance(account_id, str)
+    ):
+        arns.append(
+            f"arn:{partition}:ec2:{region}:{account_id}:instance/{config_resource_id}"[:2048]
+        )
+    elif config_resource_type == "AWS::S3::Bucket" and isinstance(config_resource_id, str):
+        arns.append(f"arn:{partition}:s3:::{config_resource_id}"[:2048])
     return list(dict.fromkeys(arns))
 
 
@@ -150,6 +225,14 @@ def normalize_cloudtrail_event(
         envelope.get("source") == "aws.config"
         and envelope.get("detail-type") == "Config Rules Compliance Change"
     )
+    securityhub_envelope = envelope.get("source") == "aws.securityhub" and envelope.get(
+        "detail-type"
+    ) in {
+        "Security Hub Findings - Imported",
+        "Security Hub Findings - Custom Action",
+    }
+    if guardduty_envelope or securityhub_envelope:
+        detail = _eventbridge_shape(detail)
     account_id = (
         detail.get("recipientAccountId")
         or detail.get("accountId")
@@ -174,6 +257,14 @@ def normalize_cloudtrail_event(
         )
     elif config_envelope:
         event_id = envelope.get("id") or detail.get("eventId")
+    elif securityhub_envelope:
+        finding_id = detail.get("id") or detail.get("findingArn")
+        updated_at = detail.get("updatedAt")
+        event_id = (
+            f"{finding_id}:{updated_at}"
+            if isinstance(finding_id, str) and isinstance(updated_at, str)
+            else finding_id
+        )
     else:
         event_id = detail.get("eventID") or detail.get("eventId")
     if not isinstance(event_id, str) or not event_id.strip():
@@ -196,6 +287,13 @@ def normalize_cloudtrail_event(
             _optional_string(detail, "messageType", 255) or "Config Rules Compliance Change"
         )
         event_time_value = detail.get("notificationCreationTime") or envelope.get("time")
+        identity = {}
+    elif securityhub_envelope:
+        event_source = "securityhub.amazonaws.com"
+        event_name = _optional_string(detail, "title", 255) or "Finding"
+        event_time_value = (
+            detail.get("updatedAt") or detail.get("createdAt") or envelope.get("time")
+        )
         identity = {}
     else:
         event_source = _required_string(detail, "eventSource").lower()
@@ -233,6 +331,13 @@ def normalize_cloudtrail_event(
     elif config_envelope:
         retained_details = {
             key: _redact(detail[key]) for key in _CONFIG_DETAIL_FIELDS if key in detail
+        }
+    elif securityhub_envelope:
+        retained_details = {
+            "finding": _redact(dict(detail)),
+            "severity": _redact(detail.get("severity")),
+            "title": detail.get("title"),
+            "id": event_id,
         }
     else:
         retained_details = {

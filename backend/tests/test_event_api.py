@@ -78,6 +78,40 @@ def test_ingestion_rejects_invalid_cloudtrail_event(client) -> None:
     assert response.status_code == 422
 
 
+def test_securityhub_eventbridge_array_ingests_each_finding(client) -> None:
+    headers = {"Authorization": f"Bearer {login(client, 'analyst@example.com')}"}
+    finding_template = {
+        "AwsAccountId": "111122223333",
+        "Region": "us-east-1",
+        "CreatedAt": "2026-03-01T12:00:00Z",
+        "UpdatedAt": "2026-03-01T12:05:00Z",
+        "Severity": {"Label": "LOW", "Normalized": 20},
+        "Workflow": {"Status": "NEW"},
+        "Resources": [{"Id": "arn:aws:s3:::example-bucket"}],
+    }
+    event = {
+        "source": "aws.securityhub",
+        "detail-type": "Security Hub Findings - Imported",
+        "account": "111122223333",
+        "region": "us-east-1",
+        "time": "2026-03-01T12:05:00Z",
+        "detail": {
+            "findings": [
+                {**finding_template, "Id": "securityhub-event-1", "Title": "Finding one"},
+                {**finding_template, "Id": "securityhub-event-2", "Title": "Finding two"},
+            ]
+        },
+    }
+
+    first = client.post("/api/v1/events/ingest", json=event, headers=headers)
+    replay = client.post("/api/v1/events/ingest", json=event, headers=headers)
+
+    assert first.status_code == replay.status_code == 200
+    assert len(first.json()["events"]) == 2
+    assert first.json()["duplicate_count"] == 0
+    assert replay.json()["duplicate_count"] == 2
+
+
 def test_event_detail_includes_redacted_inspection_fields(client) -> None:
     token = login(client, "analyst@example.com")
     headers = {"Authorization": f"Bearer {token}"}

@@ -6,12 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from app.api.dependencies import CurrentUser, Database, require_roles
-from app.ingestion.cloudtrail import EventNormalizationError
+from app.ingestion.cloudtrail import EventNormalizationError, expand_securityhub_event
 from app.ingestion.service import ingest_cloudtrail_event
 from app.models import CloudTrailEvent, User
 from app.schemas.auth import UserRole
 from app.schemas.events import (
     CloudTrailEventDetailRead,
+    EventIngestBatchResponse,
     EventIngestResponse,
     EventPage,
 )
@@ -19,7 +20,7 @@ from app.schemas.events import (
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
 
 
-@router.post("/ingest", response_model=EventIngestResponse)
+@router.post("/ingest", response_model=EventIngestResponse | EventIngestBatchResponse)
 def ingest_event(
     payload: dict[str, object],
     db: Database,
@@ -27,18 +28,27 @@ def ingest_event(
         User,
         Depends(require_roles(UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)),
     ],
-) -> EventIngestResponse:
+) -> EventIngestResponse | EventIngestBatchResponse:
     try:
-        result = ingest_cloudtrail_event(db, payload)
+        envelopes = expand_securityhub_event(payload)
+        results = [ingest_cloudtrail_event(db, envelope) for envelope in envelopes]
     except EventNormalizationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
-    return EventIngestResponse(
-        event=result.event,
-        duplicate=result.duplicate,
-        alert_ids=[alert.id for alert in result.alerts],
+    alert_ids = list(dict.fromkeys(alert.id for result in results for alert in result.alerts))
+    if len(results) == 1:
+        result = results[0]
+        return EventIngestResponse(
+            event=result.event,
+            duplicate=result.duplicate,
+            alert_ids=alert_ids,
+        )
+    return EventIngestBatchResponse(
+        events=[result.event for result in results],
+        duplicate_count=sum(result.duplicate for result in results),
+        alert_ids=alert_ids,
     )
 
 
