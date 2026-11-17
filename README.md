@@ -8,15 +8,17 @@ independent [AWS Security Auditing Tool](https://github.com/joeabur/AWS-security
 - **AWS Security Auditing Tool:** point-in-time, read-only posture assessment against its 41 controls;
   produces evidence-backed reports.
 - **This platform:** continuous event ingestion, threat detections, alerting, and incident workflows.
-  Later it will ingest audit reports so ongoing activity can be correlated with known weaknesses.
+  It imports auditor reports and correlates exact account/resource matches with ongoing activity.
 
 The auditor's current JSON report uses `schema_version: 1`, with account and region context plus
 `findings[]` entries containing `finding_id`, `control_id`, `resource_id`, `resource_type`,
-`severity`, `status`, `message`, `evidence`, `observed_at`, and `remediation`. The planned importer
-will validate that envelope, retain source report/finding identifiers and assessment timestamps,
-and map resource identifiers without changing or calling the auditor. Its sample report contains a
-masked account ID; the importer must preserve that uncertainty rather than inventing the full ID.
-No auditor dependency or API is required for this platform.
+`severity`, `status`, `message`, `evidence`, `observed_at`, and `remediation`. The importer validates
+that schema, retains a canonical report fingerprint, original finding identifiers, and assessment
+timestamps, and maps exact resource IDs without changing or calling the auditor. Masked account IDs
+are preserved and are never guessed or correlated to a full AWS account. No auditor dependency or
+API is required for this platform.
+The report importer does not verify the auditor's optional signature manifest; verify signed files
+with the auditor's published verification workflow and trusted public key before upload.
 
 ## Architecture and implementation plan
 
@@ -35,15 +37,15 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 | 4 — Incidents (complete) | Alert grouping, evidence and event timeline, incident lifecycle, assignment, notes, audit trail |
 | 5 — AWS integrations (complete) | STS account health/region discovery; GuardDuty, Security Hub, and Config finding sync/status; EventBridge/SQS routing |
 | 6 — Operations UI and notifications (complete) | Real-event metrics and filters, incident investigation UI, Slack/Teams/email outbox and delivery health |
-| 7 — Auditor integration | Schema-v1 JSON report import and correlation with current events |
+| 7 — Auditor integration (complete) | Schema-v1 JSON report import, audit history, and resource correlation with incidents/dashboard |
 | 8 — Controlled response | Detection-only by default; dry-run, analyst approval, separate permissions, audited playbooks |
 | 9 — Production readiness | Threat/security review, load/reliability tests, CI, Terraform and operational guides |
 
 ### MVP boundary
 
 The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with bounded
-GuardDuty, Security Hub, and Config collection. Auditor-report correlation, notifications, and
-response automation follow after the ingestion and incident contracts are stable. Phases 1–3
+GuardDuty, Security Hub, and Config collection. Notifications and auditor-report correlation build
+on the stable ingestion and incident contracts; response automation remains deferred. Phases 1–3
 deliberately contain no direct AWS polling, live AWS connection, or mock dashboard counts. The
 initial UI reports actual API/database health and the synthetic generator creates clearly marked
 local records.
@@ -126,6 +128,15 @@ versioned as code.
 - [x] Keep session tokens in memory in the frontend; viewers can investigate read-only while administrators and analysts can update status and add notes.
 - [x] Validate dashboard queries, outbox deduplication/retries, API permissions, migrations, frontend types, and production build without live provider calls.
 
+### Phase 7 — Auditor report integration (complete)
+
+- [x] Validate the existing AWS Security Auditing Tool's schema-v1 JSON envelope and finding fields without adding a dependency or changing that project.
+- [x] Persist report metadata and finding snapshots, preserve masked account identifiers and evidence, and deduplicate exact report re-imports by canonical content hash.
+- [x] Provide authenticated report import, report history/detail, and paginated finding search APIs; only administrators and security analysts may import.
+- [x] Correlate findings to incidents only on exact account and resource identifiers (including resource-ID suffixes from matching ARNs); show latest matching control/resource observations in incident investigation.
+- [x] Display the latest imported report and its failing/unknown findings in the dashboard, clearly separate from continuous monitoring incidents.
+- [x] Test schema rejection, role authorization, duplicate imports, masked account preservation, historical status changes, and incident/dashboard correlation using synthetic reports.
+
 ## Repository layout
 
 ```text
@@ -135,6 +146,7 @@ backend/
     core/                Settings and token/password security
     ingestion/           CloudTrail normalization, persistence, and SQS worker
     integrations/        Read-only AWS STS, GuardDuty, Security Hub, and Config clients
+    audit_reports/       Auditor JSON import and resource-level correlation
     incidents/           Alert correlation and incident lifecycle services
     detections/          Versioned rule catalog, correlation, and evaluator
     models/              SQLAlchemy entities
@@ -285,6 +297,10 @@ GET  /api/v1/incidents/{incident_id}
 PUT  /api/v1/incidents/{incident_id}/status
 PUT  /api/v1/incidents/{incident_id}/assignment
 POST /api/v1/incidents/{incident_id}/notes
+POST /api/v1/audit-reports/import
+GET  /api/v1/audit-reports?account_id=111122223333&limit=50&offset=0
+GET  /api/v1/audit-reports/{report_id}
+GET  /api/v1/audit-findings?status=FAIL&severity=high&resource_id=sg-0123456789abcdef0
 GET  /api/v1/accounts
 GET  /api/v1/accounts/{account_id}/health
 GET  /api/v1/findings?provider=guardduty&severity=high&limit=50&offset=0
@@ -297,6 +313,33 @@ GET  /api/v1/notifications?status=failed&channel=slack
 POST /api/v1/notifications/process
 POST /api/v1/notifications/{delivery_id}/retry
 ```
+
+Import the auditor's schema-v1 JSON report with an authenticated Administrator or Security Analyst
+token:
+
+```bash
+curl --fail-with-body --request POST http://localhost:8000/api/v1/audit-reports/import \
+  --header "Authorization: Bearer $TOKEN" \
+  --header "Content-Type: application/json" \
+  --data-binary @audit-report.json
+```
+
+An identical canonical report import returns the existing report with `duplicate: true`; later
+assessments are retained as separate snapshots. The auditor does not assign a report ID, so the
+platform's canonical SHA-256 fingerprint is the report-level deduplication identifier; original
+finding IDs are retained. Report/finding endpoints are authenticated and paginated.
+`GET /api/v1/incidents/{incident_id}` includes the newest imported finding for each matching
+control/resource, principal, or exact account-scoped resource; the dashboard displays failing or
+unknown results from its latest applicable report. PASS/FAIL posture checks do not automatically
+become monitoring incidents.
+Masked account identifiers remain masked and are deliberately excluded from exact-account
+correlation. Imported findings retain report evidence and remediation data; no full report envelope
+or unrelated auditor output files are copied.
+
+The auditor's signature manifest is not verified by this API. A content hash is used only for
+duplicate detection and is not proof of authenticity. Before uploading a signed report, verify its
+manifest using the auditor's verification command and a trusted public key distributed out of band.
+No live auditor service, AWS account, or third-party notification service is called by this import.
 
 The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
 Administrator or Security Analyst token. Read access requires authentication. The local synthetic
@@ -403,4 +446,5 @@ future deployment is represented as a quote or included in this repository yet.
   comprehensively configured or that no events were missed.
 - Notifications and a persisted-data operations dashboard are implemented, but notification
   dispatch requires explicit administrator/CLI invocation or an externally configured schedule.
-- Auditor-report import and response actions are not implemented yet; response remains detection-only.
+- Auditor-report JSON import is implemented, but signed-manifest verification is an offline operator
+  responsibility. Response actions are not implemented; response remains detection-only.

@@ -129,6 +129,22 @@ td strong { color: #293a52; font-size: 10px; }
 .note-form label { color: #69798e; font-size: 9px; font-weight: 700; }
 .note-form textarea { min-height: 70px; resize: vertical; border: 1px solid #dce3eb; border-radius: 5px; padding: 8px; color: var(--ink); font: inherit; font-size: 10px; }
 .note-form .primary-button { align-self: flex-start; margin: 0; padding: 8px 11px; }
+.audit-report-summary { display: flex; flex-wrap: wrap; gap: 7px 18px; border-bottom: 1px solid #edf0f4; padding: 0 0 11px; color: #78889b; font-size: 9px; }
+.audit-report-summary strong { color: #40536b; }
+.audit-finding-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; padding-top: 11px; }
+.audit-finding-card { min-width: 0; border: 1px solid #e8edf2; border-radius: 6px; padding: 10px; color: #5d6e83; font-size: 9px; line-height: 1.5; }
+.audit-finding-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.audit-finding-heading strong { flex: 1; min-width: 130px; color: #3c4e65; font-size: 10px; }
+.finding-status { border-radius: 9px; padding: 2px 6px; background: #eff2f5; color: #64758a; font-size: 8px; font-weight: 700; }
+.finding-status.status-fail { background: #fff0ef; color: #bb4f4b; }
+.finding-status.status-error, .finding-status.status-not_assessed { background: #fff6e8; color: #a8752c; }
+.audit-finding-card p { margin: 7px 0; }
+.audit-finding-card small { display: block; color: #8b97a5; font-size: 8px; overflow-wrap: anywhere; }
+.audit-finding-card details { margin-top: 8px; border-top: 1px solid #edf0f4; padding-top: 7px; }
+.audit-finding-card summary { cursor: pointer; color: #63748a; font-size: 8px; font-weight: 700; }
+.audit-finding-card pre { max-height: 180px; overflow: auto; padding: 8px; background: #f5f7fa; color: #43536a; font-size: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.audit-finding-card ul { padding-left: 16px; }
+.suppression-note { border-left: 2px solid #d8a34c; padding-left: 7px; color: #92733d; }
 .error-message { color: #b94b4b; font-size: 12px; }
 .login-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 0%, #e1f3ee 0, #f3f6fa 48%); }
 .login-card { width: min(400px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 30px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 45px #26344912; }
@@ -164,6 +180,7 @@ td strong { color: #293a52; font-size: 10px; }
   .metric-card strong { font-size: 22px; }
   .dashboard-grid, .lower-grid { grid-template-columns: 1fr; }
   .detail-columns { grid-template-columns: 1fr; gap: 0; }
+  .audit-finding-list { grid-template-columns: 1fr; }
   .incident-detail-heading { align-items: flex-start; flex-direction: column; }
   .context-line { gap: 9px 16px; }
   .status-label { display: none; }

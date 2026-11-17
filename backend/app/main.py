@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.accounts import router as accounts_router
+from app.api.audit_reports import router as audit_reports_router
 from app.api.dashboard import router as dashboard_router
 from app.api.detections import router as detections_router
 from app.api.events import router as events_router
@@ -36,6 +37,7 @@ app.add_middleware(
 )
 app.include_router(router)
 app.include_router(accounts_router)
+app.include_router(audit_reports_router)
 app.include_router(dashboard_router)
 app.include_router(events_router)
 app.include_router(findings_router)

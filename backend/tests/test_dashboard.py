@@ -48,9 +48,12 @@ def test_dashboard_summary_uses_persisted_events_alerts_and_incidents(client, mo
         "monitored_regions": 0,
         "notifications_pending": 0,
         "notifications_failed": 0,
+        "active_audit_failures": 0,
     }
     assert summary.json()["recent_events"][0]["is_synthetic"] is False
     assert summary.json()["recent_incidents"][0]["severity"] == "critical"
+    assert summary.json()["latest_audit_report"] is None
+    assert summary.json()["audit_findings"] == []
     assert critical.json()["metrics"]["total_alerts"] == 1
     assert critical.json()["aws_connection_status"] == "unknown"
 

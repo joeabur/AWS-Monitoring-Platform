@@ -40,8 +40,41 @@ type IncidentDetail = {
     response_recommendations: string[];
   }[];
   events: (EventRow & { event_details: Record<string, unknown> })[];
+  audit_findings: AuditFinding[];
   notes: { id: string; author_email: string | null; body: string; created_at: string }[];
   timeline: { entry_type: string; occurred_at: string; summary: string }[];
+};
+type AuditFinding = {
+  id: string;
+  report_id: string;
+  report_generated_at: string;
+  source_finding_id: string;
+  account_id: string;
+  region: string;
+  control_id: string;
+  title: string;
+  resource_id: string;
+  resource_type: string;
+  severity: string;
+  status: string;
+  message: string;
+  evidence: Record<string, unknown>;
+  sources: string[];
+  observed_at: string;
+  remediation: string;
+  uncertainty: string[];
+  suppression: { reason: string; owner: string; expires: string } | null;
+};
+type AuditReport = {
+  id: string;
+  account_id: string;
+  regions: string[];
+  audit_profile: string;
+  tool_name: string;
+  tool_version: string;
+  catalog_version: string;
+  generated_at: string;
+  finding_count: number;
 };
 type Integration = {
   account_id: string;
@@ -66,6 +99,7 @@ type Dashboard = {
     monitored_regions: number;
     notifications_pending: number;
     notifications_failed: number;
+    active_audit_failures: number;
   };
   severity_distribution: Count[];
   top_detection_rules: Count[];
@@ -75,6 +109,8 @@ type Dashboard = {
   recent_events: EventRow[];
   recent_incidents: IncidentRow[];
   integrations: Integration[];
+  latest_audit_report: AuditReport | null;
+  audit_findings: AuditFinding[];
   aws_connection_status: string;
 };
 
@@ -400,6 +436,7 @@ export default function Home() {
               <Metric label="Security Hub findings" value={metrics?.securityhub_findings ?? 0} />
               <Metric label="Notifications pending" value={metrics?.notifications_pending ?? 0} tone="amber" />
               <Metric label="Notifications failed" value={metrics?.notifications_failed ?? 0} tone="red" />
+              <Metric label="Audit failures" value={metrics?.active_audit_failures ?? 0} tone="red" />
             </div>
 
             <div className="context-line">
@@ -477,6 +514,27 @@ export default function Home() {
               </Panel>
             </div>
 
+            <Panel title="Imported posture assessment" subtitle="Latest point-in-time report from the AWS Security Auditing Tool">
+              {!dashboard.latest_audit_report ? (
+                <Empty>No audit report imported. Import a schema-v1 JSON report to correlate posture findings.</Empty>
+              ) : (
+                <>
+                  <div className="audit-report-summary">
+                    <strong>{dashboard.latest_audit_report.tool_name} · catalog {dashboard.latest_audit_report.catalog_version}</strong>
+                    <span>Account {dashboard.latest_audit_report.account_id} · {dashboard.latest_audit_report.audit_profile}</span>
+                    <span>Assessed {formatTime(dashboard.latest_audit_report.generated_at)} · {dashboard.latest_audit_report.finding_count} checks</span>
+                  </div>
+                  {dashboard.audit_findings.length === 0 ? (
+                    <Empty>No failing or unknown checks in this imported report for the selected filters.</Empty>
+                  ) : (
+                    <div className="audit-finding-list">
+                      {dashboard.audit_findings.map((finding) => <AuditFindingCard finding={finding} key={finding.id} />)}
+                    </div>
+                  )}
+                </>
+              )}
+            </Panel>
+
             {selectedIncidentId && (
               <Panel title="Incident investigation" subtitle="Evidence, timeline, recommendations, and analyst notes">
                 <div className="detail-toolbar">
@@ -534,6 +592,12 @@ export default function Home() {
                             <h5>Recommended actions</h5>
                             <ul>{alert.response_recommendations.map((step) => <li key={step}>{step}</li>)}</ul>
                           </article>
+                        ))}
+                        <h4>Related auditor findings</h4>
+                        {incidentDetail.audit_findings.length === 0 ? (
+                          <Empty>No imported audit weakness matches this account and resource.</Empty>
+                        ) : incidentDetail.audit_findings.map((finding) => (
+                          <AuditFindingCard finding={finding} key={finding.id} />
                         ))}
                         <h4>Related events</h4>
                         {incidentDetail.events.map((event) => (
@@ -667,4 +731,30 @@ function CountList({ items, empty }: { items: Count[]; empty: string }) {
 
 function Empty({ children }: { children: ReactNode }) {
   return <div className="empty-state">{children}</div>;
+}
+
+function AuditFindingCard({ finding }: { finding: AuditFinding }) {
+  const severity = finding.severity === "info" ? "informational" : finding.severity;
+  return (
+    <article className="audit-finding-card">
+      <div className="audit-finding-heading">
+        <SeverityPill severity={severity} />
+        <span className={`finding-status status-${finding.status.toLowerCase()}`}>{finding.status.replaceAll("_", " ")}</span>
+        <strong>{finding.control_id}: {finding.title}</strong>
+      </div>
+      <p>{finding.message}</p>
+      <small>{finding.resource_id} · {finding.account_id} · {finding.region} · Observed {formatTime(finding.observed_at)}</small>
+      {finding.suppression && (
+        <p className="suppression-note">Suppressed until {finding.suppression.expires}: {finding.suppression.reason}</p>
+      )}
+      <details>
+        <summary>Remediation, evidence, and limitations</summary>
+        <p><strong>Remediation:</strong> {finding.remediation}</p>
+        <pre>{JSON.stringify(finding.evidence, null, 2)}</pre>
+        {finding.uncertainty.length > 0 && (
+          <ul>{finding.uncertainty.map((item) => <li key={item}>{item}</li>)}</ul>
+        )}
+      </details>
+    </article>
+  );
 }

@@ -8,12 +8,15 @@ from sqlalchemy import case, func, select
 from app.api.dependencies import CurrentUser, Database
 from app.core.config import get_settings
 from app.models import (
+    AuditorFinding,
+    AuditorReport,
     AwsIntegrationHealth,
     CloudTrailEvent,
     DetectionAlert,
     Incident,
     NotificationDelivery,
 )
+from app.schemas.audit_reports import AuditFindingRead, AuditReportRead
 from app.schemas.dashboard import DashboardCount, DashboardMetrics, DashboardSummary
 from app.schemas.incidents import IncidentRead
 
@@ -213,6 +216,64 @@ def dashboard_summary(
         if monitored_account_ids
         else []
     )
+    report_filters = []
+    if account_id is not None:
+        report_filters.append(AuditorReport.account_id == account_id)
+    latest_audit_report = db.scalars(
+        select(AuditorReport)
+        .where(*report_filters)
+        .order_by(AuditorReport.generated_at.desc(), AuditorReport.id)
+        .limit(1)
+    ).first()
+    audit_findings: list[AuditorFinding] = []
+    active_audit_failures = 0
+    if latest_audit_report is not None:
+        finding_filters = [
+            AuditorFinding.report_id == latest_audit_report.id,
+            AuditorFinding.status.in_(("FAIL", "ERROR", "NOT_ASSESSED")),
+        ]
+        if region is not None:
+            finding_filters.append(AuditorFinding.region.in_((region.lower(), "global")))
+        if severity is not None:
+            audit_severity = "info" if severity == "informational" else severity
+            finding_filters.append(AuditorFinding.severity == audit_severity)
+        active_failure_filters = [
+            AuditorFinding.report_id == latest_audit_report.id,
+            AuditorFinding.status == "FAIL",
+            AuditorFinding.suppression.is_(None),
+        ]
+        if region is not None:
+            active_failure_filters.append(AuditorFinding.region.in_((region.lower(), "global")))
+        if severity is not None:
+            audit_severity = "info" if severity == "informational" else severity
+            active_failure_filters.append(AuditorFinding.severity == audit_severity)
+        active_audit_failures = (
+            db.scalar(
+                select(func.count()).select_from(AuditorFinding).where(*active_failure_filters)
+            )
+            or 0
+        )
+        audit_findings = db.scalars(
+            select(AuditorFinding)
+            .where(*finding_filters)
+            .order_by(
+                case(
+                    (AuditorFinding.status == "FAIL", 0),
+                    (AuditorFinding.status == "ERROR", 1),
+                    else_=2,
+                ),
+                case(
+                    (AuditorFinding.severity == "critical", 0),
+                    (AuditorFinding.severity == "high", 1),
+                    (AuditorFinding.severity == "medium", 2),
+                    (AuditorFinding.severity == "low", 3),
+                    else_=4,
+                ),
+                AuditorFinding.control_id,
+                AuditorFinding.resource_id,
+            )
+            .limit(10)
+        ).all()
     monitored_regions = {integration.region for integration in integrations if integration.region}
     if not configured_accounts:
         connection_status = "not_configured"
@@ -249,6 +310,7 @@ def dashboard_summary(
             monitored_regions=len(monitored_regions),
             notifications_pending=notifications_pending,
             notifications_failed=notifications_failed,
+            active_audit_failures=active_audit_failures,
         ),
         severity_distribution=[
             DashboardCount(name=str(name), count=count) for name, count in severity_distribution
@@ -262,5 +324,11 @@ def dashboard_summary(
         recent_events=recent_events,
         recent_incidents=[IncidentRead.model_validate(item) for item in recent_incidents],
         integrations=integrations,
+        latest_audit_report=(
+            AuditReportRead.model_validate(latest_audit_report)
+            if latest_audit_report is not None
+            else None
+        ),
+        audit_findings=[AuditFindingRead.model_validate(finding) for finding in audit_findings],
         aws_connection_status=connection_status,
     )

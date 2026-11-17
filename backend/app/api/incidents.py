@@ -8,9 +8,11 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import CurrentUser, Database, require_roles
+from app.audit_reports.service import correlated_audit_findings
 from app.models import CloudTrailEvent, DetectionAlert, Incident, IncidentAlert, IncidentAuditEntry
 from app.models.incident import InvestigationNote
 from app.models.user import User
+from app.schemas.audit_reports import AuditFindingRead
 from app.schemas.auth import UserRole
 from app.schemas.detections import AlertRead
 from app.schemas.events import CloudTrailEventDetailRead
@@ -277,6 +279,18 @@ def get_incident(
         incident=IncidentRead.model_validate(incident),
         alerts=[AlertRead.model_validate(alert) for alert in alerts],
         events=[CloudTrailEventDetailRead.model_validate(event) for event in events],
+        audit_findings=[
+            AuditFindingRead.model_validate(finding)
+            for finding in correlated_audit_findings(
+                db,
+                incident.account_id,
+                [
+                    *incident.resource_arns,
+                    *([incident.principal_arn] if incident.principal_arn else []),
+                    f"account/{incident.account_id}",
+                ],
+            )
+        ],
         notes=note_reads,
         audit_trail=[IncidentAuditRead.model_validate(entry) for entry in audit_entries],
         timeline=timeline,

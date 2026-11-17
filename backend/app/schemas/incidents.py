@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.audit_reports import AuditFindingRead
 from app.schemas.detections import AlertRead
 from app.schemas.events import CloudTrailEventDetailRead
 
@@ -94,6 +95,7 @@ class IncidentDetail(BaseModel):
     incident: IncidentRead
     alerts: list[AlertRead]
     events: list[CloudTrailEventDetailRead]
+    audit_findings: list[AuditFindingRead]
     notes: list[InvestigationNoteRead]
     audit_trail: list[IncidentAuditRead]
     timeline: list[IncidentTimelineEntry]

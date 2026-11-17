@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.schemas.accounts import IntegrationHealthRead
+from app.schemas.audit_reports import AuditFindingRead, AuditReportRead
 from app.schemas.events import CloudTrailEventRead
 from app.schemas.incidents import IncidentRead
 
@@ -23,6 +24,7 @@ class DashboardMetrics(BaseModel):
     monitored_regions: int
     notifications_pending: int
     notifications_failed: int
+    active_audit_failures: int
 
 
 class DashboardSummary(BaseModel):
@@ -38,4 +40,6 @@ class DashboardSummary(BaseModel):
     recent_events: list[CloudTrailEventRead]
     recent_incidents: list[IncidentRead]
     integrations: list[IntegrationHealthRead]
+    latest_audit_report: AuditReportRead | None
+    audit_findings: list[AuditFindingRead]
     aws_connection_status: str
