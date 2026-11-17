@@ -153,6 +153,7 @@ versioned as code.
 - [x] Run API and frontend containers as non-root users, use the frontend lockfile/standalone output, and support a one-off production migration job instead of concurrent startup migrations.
 - [x] Add dependency update automation and an operations guide covering deployment gates, backups, recovery, queue/DLQ operations, response safety, and cost review.
 - [x] Fail closed on production SQLite, PostgreSQL without TLS, invalid/non-HTTPS CORS origins, and bound login password input before password verification.
+- [x] Pin CI actions to immutable commits and use a fixed Ubuntu runner image to reduce workflow supply-chain and runner drift.
 - [ ] Production AWS deployment, cost estimate, live integration/restore exercises, load/soak tests against declared volume targets, and independent security assessment require an approved isolated environment and are not claimed complete.
 
 ## Repository layout

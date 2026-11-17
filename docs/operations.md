@@ -22,8 +22,11 @@ deployments; do not allow every API replica to run schema migrations concurrentl
 ## Release and migration procedure
 
 The GitHub Actions workflow validates backend tests/lint, frontend type/build, and Terraform
-format/validation. It does not publish images, deploy infrastructure, or perform live AWS tests.
-Build and publish signed/versioned images through a separately approved release pipeline.
+format/validation on a fixed Ubuntu runner. Third-party actions are pinned to immutable commit
+SHAs, with release tags in comments so Dependabot can propose updates. Review action updates for
+permissions and behavior before merging. CI does not publish images, deploy infrastructure, or
+perform live AWS tests. Build and publish signed/versioned images through a separately approved
+release pipeline.
 
 For production, set `MIGRATIONS_ON_STARTUP=false` on API replicas. Run `alembic upgrade head` once
 as a deployment job using the same API image, database secret, network, and release version before
