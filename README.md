@@ -31,9 +31,9 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 |---|---|
 | 1 — Foundation (complete) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
 | 2 — Ingestion (complete) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
-| 3 — Detection (current) | 15 versioned rules, thresholds/correlation, persisted deduplicated alerts, explicit risk-score basis, rule test API and synthetic scenarios |
-| 4 — Incidents | Evidence, incident lifecycle, timeline, assignment, notes, audit trail |
-| 5 — AWS integrations | STS multi-account/region discovery, GuardDuty, Security Hub, AWS Config; mock-backed tests |
+| 3 — Detection (complete) | 15 versioned rules, thresholds/correlation, persisted deduplicated alerts, explicit risk-score basis, rule test API and synthetic scenarios |
+| 4 — Incidents (complete) | Alert grouping, evidence and event timeline, incident lifecycle, assignment, notes, audit trail |
+| 5 — AWS integrations (next) | STS multi-account/region discovery, GuardDuty, Security Hub, AWS Config; mock-backed tests |
 | 6 — Operations UI and notifications | Real-event metrics, filters, Slack/Teams/email routing, delivery health |
 | 7 — Auditor integration | Schema-v1 JSON report import and correlation with current events |
 | 8 — Controlled response | Detection-only by default; dry-run, analyst approval, separate permissions, audited playbooks |
@@ -87,6 +87,20 @@ versioned rule definitions. Rule definitions live in
 [`backend/app/detections/rules.py`](./backend/app/detections/rules.py); updates are reviewed and
 versioned as code.
 
+### Phase 4 — Incident management (complete)
+
+- [x] Persist incidents and alert associations; related active alerts are grouped by account, region,
+  and principal, resource, or source IP when observed within 24 hours. Signals without a shared
+  principal, resource, or source IP are kept distinct by rule and alert key.
+- [x] Incident severity/risk reflects the highest linked alert; scores remain relative rule-defined
+  priorities, not a probability.
+- [x] Support `new`, `acknowledged`, `investigating`, `contained`, `resolved`, and `false_positive`
+  lifecycle states, with validated transitions and explicit reopening after new evidence.
+- [x] Provide paginated/searchable incident listing, evidence and event timelines, analyst
+  assignment, append-only investigation notes, and an actor-attributed audit trail.
+- [x] Require Administrator or Security Analyst authorization for incident mutations; viewers retain
+  read-only access. Every analyst mutation is recorded in the incident audit trail.
+
 ## Repository layout
 
 ```text
@@ -130,9 +144,9 @@ After Compose is running, create the first administrator interactively:
 docker compose exec api python -m app.scripts.create_admin
 ```
 
-The dashboard currently reports application/database health only. There are no AWS accounts
-connected or incident workflows yet. Phase 2 events can be populated locally with synthetic-only
-data, which can generate Phase 3 alerts:
+The dashboard currently reports application/database health only; AWS accounts are not connected.
+Phase 2 events can be populated locally with synthetic-only data, which can generate alerts and
+incidents:
 
 ```bash
 docker compose exec api python -m app.scripts.generate_sample_events --count 8
@@ -148,6 +162,11 @@ GET  /api/v1/detections
 POST /api/v1/detections/{rule_id}/test
 GET  /api/v1/alerts?severity=high&status=open&limit=50&offset=0
 GET  /api/v1/alerts/{alert_id}
+GET  /api/v1/incidents?status=new&severity=high&account_id=111122223333
+GET  /api/v1/incidents/{incident_id}
+PUT  /api/v1/incidents/{incident_id}/status
+PUT  /api/v1/incidents/{incident_id}/assignment
+POST /api/v1/incidents/{incident_id}/notes
 ```
 
 The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
@@ -168,6 +187,13 @@ GuardDuty findings and Config compliance notifications can be normalized and tes
 ingest API, but the Terraform SQS module currently routes CloudTrail management events only. A
 GuardDuty/Config AWS delivery integration still needs to be configured and verified separately.
 
+Incidents are created transactionally alongside detection alerts. A repeated AWS event is
+idempotent; related alerts are attached to a recent active incident, while resolved incidents are
+reopened only when new matching evidence arrives (or a new incident is created for a distinct alert
+group). The incident detail API provides alert and event evidence, analyst notes, audit entries, and
+a timestamp-sorted timeline. Assignment and lifecycle changes are restricted to administrators and
+security analysts; notes and action history are append-only.
+
 The event worker is packaged with `backend/Dockerfile.worker`, using
 `app.ingestion.worker.lambda_handler`. For SQS-triggered Lambda, enable `ReportBatchItemFailures` on the event-source mapping so failed records are retried
 independently. The opt-in Terraform module at
@@ -185,7 +211,7 @@ pip install -r backend/requirements-dev.txt
 cd backend && python -m pytest
 ```
 
-No AWS credentials are needed for tests. Live AWS collector deployment is not part of Phase 3.
+No AWS credentials are needed for tests. Live AWS collector deployment is not part of Phase 4.
 
 ## AWS access, permissions, and cost approach
 

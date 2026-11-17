@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.detections.engine import DetectionMatch, evaluate_event
+from app.incidents.correlation import attach_alert_to_incident
 from app.ingestion.cloudtrail import normalize_cloudtrail_event
 from app.models import CloudTrailEvent, DetectionAlert
 
@@ -147,6 +148,8 @@ def ingest_cloudtrail_event(
         )
         matches = evaluate_event(record, context, get_settings())
         alerts = _save_alerts(db, record, context, matches)
+        for alert in alerts:
+            attach_alert_to_incident(db, alert)
         db.commit()
         db.refresh(record)
         for alert in alerts:
