@@ -30,8 +30,8 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 | Phase | Deliverable |
 |---|---|
 | 1 — Foundation (complete) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
-| 2 — Ingestion (current) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
-| 3 — Detection | Versioned detection-as-code, initial rule library, thresholds/correlation, transparent risk score, test harness |
+| 2 — Ingestion (complete) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
+| 3 — Detection (current) | 15 versioned rules, thresholds/correlation, persisted deduplicated alerts, explicit risk-score basis, rule test API and synthetic scenarios |
 | 4 — Incidents | Evidence, incident lifecycle, timeline, assignment, notes, audit trail |
 | 5 — AWS integrations | STS multi-account/region discovery, GuardDuty, Security Hub, AWS Config; mock-backed tests |
 | 6 — Operations UI and notifications | Real-event metrics, filters, Slack/Teams/email routing, delivery health |
@@ -44,10 +44,9 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with GuardDuty
 as the first enrichment source. Security Hub, Config, correlation with imported audit findings,
 notifications, and response automation follow only after the ingestion and incident contracts are
-stable. Phases 1 and 2 deliberately contain no direct AWS polling, live AWS connection, detection
-rules, or mock dashboard counts. The initial UI reports actual API/database health and explicitly
-says when monitoring is not yet connected. Phase 2's synthetic generator creates clearly marked
-local records.
+stable. Phases 1–3 deliberately contain no direct AWS polling, live AWS connection, or mock
+dashboard counts. The initial UI reports actual API/database health and explicitly says when
+monitoring is not yet connected. The synthetic generator creates clearly marked local records.
 
 ## Milestones and acceptance criteria
 
@@ -56,7 +55,7 @@ local records.
 - [x] Local application, PostgreSQL migration, authentication, role checks, service health, and live
   health dashboard.
 
-### Phase 2 — Event ingestion (current)
+### Phase 2 — Event ingestion (complete)
 
 - [x] Normalize CloudTrail records and EventBridge envelopes; normalize timestamps to UTC and reject
   ambiguous timestamps or missing account/event identifiers.
@@ -69,6 +68,25 @@ local records.
 - [x] Generate local synthetic CloudTrail records with an explicit synthetic marker.
 - [x] Routine validation does not require AWS credentials or paid AWS services.
 
+### Phase 3 — Detection engineering (complete)
+
+- [x] Versioned detection library covers 15 AWS activity and exposure scenarios, with MITRE
+  mappings where applicable.
+- [x] Evaluate new events during ingestion; thresholded failures correlate within documented
+  windows and by source/principal where appropriate.
+- [x] Persist deduplicated alerts with evidence-event references, relative risk score explanation,
+  recommended investigation steps, and response guidance.
+- [x] Provide authenticated rule inventory, event test endpoint, alert search/filter/pagination, and
+  alert evidence endpoint.
+- [x] Keep allowlist-dependent rules disabled until their required environment configuration exists.
+- [x] Test expected positive/negative scenarios and ensure rule tests do not persist synthetic events.
+
+Scores are rule-defined prioritization values from 0–100, **not probabilities or definitive risk**.
+Rule severity and score basis are visible on every alert; score values can be adjusted in the
+versioned rule definitions. Rule definitions live in
+[`backend/app/detections/rules.py`](./backend/app/detections/rules.py); updates are reviewed and
+versioned as code.
+
 ## Repository layout
 
 ```text
@@ -77,6 +95,7 @@ backend/
     api/                 Versioned API routes and authentication
     core/                Settings and token/password security
     ingestion/           CloudTrail normalization, persistence, and SQS worker
+    detections/          Versioned rule catalog, correlation, and evaluator
     models/              SQLAlchemy entities
     schemas/             Validated API contracts
     database.py          Database engine and session dependency
@@ -111,9 +130,9 @@ After Compose is running, create the first administrator interactively:
 docker compose exec api python -m app.scripts.create_admin
 ```
 
-The dashboard currently reports application/database health only. There are no AWS accounts,
-alerts, or incidents until later phases are implemented. Phase 2 events can be populated locally
-with synthetic-only data:
+The dashboard currently reports application/database health only. There are no AWS accounts
+connected or incident workflows yet. Phase 2 events can be populated locally with synthetic-only
+data, which can generate Phase 3 alerts:
 
 ```bash
 docker compose exec api python -m app.scripts.generate_sample_events --count 8
@@ -125,12 +144,29 @@ Ingest or query normalized events using the authenticated API:
 POST /api/v1/events/ingest
 GET  /api/v1/events?account_id=111122223333&region=us-east-1&limit=50&offset=0
 GET  /api/v1/events/{event_id}
+GET  /api/v1/detections
+POST /api/v1/detections/{rule_id}/test
+GET  /api/v1/alerts?severity=high&status=open&limit=50&offset=0
+GET  /api/v1/alerts/{alert_id}
 ```
 
 The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
 Administrator or Security Analyst token. Read access requires authentication. The local synthetic
 generator inserts into the configured database and marks records as synthetic; do not confuse those
 records with AWS telemetry.
+
+Newly ingested events are evaluated against the rule library and can create or update an alert in
+the same database transaction. Replays of the same AWS event do not re-evaluate or duplicate its
+alert. Failed console login and denied API rules use five matching events in ten minutes; matching
+is grouped by source IP or principal. Access-key correlation is limited to the configured one-hour
+window. Rule test requests do not store the submitted event or produce alerts.
+
+Rules that need an expected-user, trusted-CIDR, or sensitive-resource list stay disabled while the
+corresponding `.env` value is empty. Configure comma-separated values in `EXPECTED_IAM_USERS`,
+`TRUSTED_IP_CIDRS`, and `SENSITIVE_RESOURCE_ARNS`; invalid CIDRs fail configuration validation.
+GuardDuty findings and Config compliance notifications can be normalized and tested through the
+ingest API, but the Terraform SQS module currently routes CloudTrail management events only. A
+GuardDuty/Config AWS delivery integration still needs to be configured and verified separately.
 
 The event worker is packaged with `backend/Dockerfile.worker`, using
 `app.ingestion.worker.lambda_handler`. For SQS-triggered Lambda, enable `ReportBatchItemFailures` on the event-source mapping so failed records are retried
@@ -149,7 +185,7 @@ pip install -r backend/requirements-dev.txt
 cd backend && python -m pytest
 ```
 
-No AWS credentials are needed for tests. Live AWS collector deployment is not part of Phase 2.
+No AWS credentials are needed for tests. Live AWS collector deployment is not part of Phase 3.
 
 ## AWS access, permissions, and cost approach
 
@@ -182,5 +218,8 @@ future deployment is represented as a quote or included in this repository yet.
   TLS and a reviewed token/session strategy.
 - Direct AWS event delivery/deployment has not been configured or verified in a real AWS account.
   The Terraform module defines a queue/rule pattern; it is not a deployed AWS integration.
-- Detection rules, alerts, incident handling, GuardDuty, and notification delivery remain future
-  phases. The event API and SQS worker persist normalized events only; they do not declare incidents.
+- The detection engine generates alerts but does not manage incidents, analyst acknowledgements,
+  assignments, or investigation notes; those are Phase 4.
+- GuardDuty and Config EventBridge records can be normalized for detection, but no AWS delivery rule
+  for those sources has been deployed.
+- There are no notifications, response actions, or live detection dashboards yet.

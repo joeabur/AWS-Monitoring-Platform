@@ -35,7 +35,11 @@ def ingest_event(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
-    return EventIngestResponse(event=result.event, duplicate=result.duplicate)
+    return EventIngestResponse(
+        event=result.event,
+        duplicate=result.duplicate,
+        alert_ids=[alert.id for alert in result.alerts],
+    )
 
 
 @router.get("", response_model=EventPage)

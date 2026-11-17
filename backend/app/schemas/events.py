@@ -31,6 +31,7 @@ class CloudTrailEventDetailRead(CloudTrailEventRead):
 class EventIngestResponse(BaseModel):
     event: CloudTrailEventRead
     duplicate: bool
+    alert_ids: list[UUID]
 
 
 class EventPage(BaseModel):

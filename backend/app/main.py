@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.detections import router as detections_router
 from app.api.events import router as events_router
 from app.api.routes import router
 from app.core.config import get_settings
@@ -30,3 +31,4 @@ app.add_middleware(
 )
 app.include_router(router)
 app.include_router(events_router)
+app.include_router(detections_router)

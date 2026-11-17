@@ -1,6 +1,7 @@
+import ipaddress
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +13,21 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = Field(default=30, gt=0)
     cors_origins: str = "http://localhost:3000"
     environment: str = "development"
+    expected_iam_users: str = ""
+    trusted_ip_cidrs: str = ""
+    sensitive_resource_arns: str = ""
+
+    @field_validator("trusted_ip_cidrs")
+    @classmethod
+    def validate_trusted_ip_cidrs(cls, value: str) -> str:
+        for cidr in value.split(","):
+            normalized = cidr.strip()
+            if normalized:
+                try:
+                    ipaddress.ip_network(normalized, strict=False)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid trusted IP CIDR: {normalized}") from exc
+        return value
 
     @property
     def allowed_origins(self) -> list[str]:
