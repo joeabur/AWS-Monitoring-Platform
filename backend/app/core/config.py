@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "sqlite:///./monitoring.db"
-    jwt_secret_key: SecretStr = Field(min_length=32)
+    jwt_secret_key: SecretStr | None = Field(default=None, min_length=32)
     jwt_expire_minutes: int = Field(default=30, gt=0)
     cors_origins: str = "http://localhost:3000"
     environment: str = "development"
@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    def require_jwt_secret(self) -> str:
+        if self.jwt_secret_key is None:
+            raise ValueError("JWT_SECRET_KEY must be configured for the API")
+        return self.jwt_secret_key.get_secret_value()
 
 
 @lru_cache

@@ -29,8 +29,8 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 
 | Phase | Deliverable |
 |---|---|
-| 1 — Foundation (current) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
-| 2 — Ingestion | CloudTrail/EventBridge-to-SQS contract, normalized event model, durable worker, deduplication, synthetic event generator |
+| 1 — Foundation (complete) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
+| 2 — Ingestion (current) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
 | 3 — Detection | Versioned detection-as-code, initial rule library, thresholds/correlation, transparent risk score, test harness |
 | 4 — Incidents | Evidence, incident lifecycle, timeline, assignment, notes, audit trail |
 | 5 — AWS integrations | STS multi-account/region discovery, GuardDuty, Security Hub, AWS Config; mock-backed tests |
@@ -44,23 +44,30 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with GuardDuty
 as the first enrichment source. Security Hub, Config, correlation with imported audit findings,
 notifications, and response automation follow only after the ingestion and incident contracts are
-stable. Phase 1 deliberately contains no AWS polling, synthetic activity, or mock dashboard counts.
-The initial UI reports actual API/database health and explicitly says when monitoring is not yet
-connected.
+stable. Phases 1 and 2 deliberately contain no direct AWS polling, live AWS connection, detection
+rules, or mock dashboard counts. The initial UI reports actual API/database health and explicitly
+says when monitoring is not yet connected. Phase 2's synthetic generator creates clearly marked
+local records.
 
-## First milestone: Phase 1
+## Milestones and acceptance criteria
 
-### Acceptance criteria
+### Phase 1 — Foundation (complete)
 
-- [x] Local application layout and dependency/container definitions exist.
-- [x] PostgreSQL schema is versioned through Alembic.
-- [x] Login uses Argon2 password hashes and signed short-lived JWTs; there is no public signup.
-- [x] Administrator, Security Analyst, and Read-only Viewer roles are represented; the
-  administrator-only user listing verifies role enforcement.
-- [x] Health endpoint checks the database and reports failure instead of returning a false healthy
-  status.
-- [x] Dashboard displays live health from the API, not sample monitoring data.
-- [x] Routine backend tests run without AWS credentials or a paid AWS account.
+- [x] Local application, PostgreSQL migration, authentication, role checks, service health, and live
+  health dashboard.
+
+### Phase 2 — Event ingestion (current)
+
+- [x] Normalize CloudTrail records and EventBridge envelopes; normalize timestamps to UTC and reject
+  ambiguous timestamps or missing account/event identifiers.
+- [x] Persist selected normalized fields and a filtered detail subset, redact obvious secret-bearing
+  keys, and deduplicate by account, region, and CloudTrail event ID.
+- [x] Provide authenticated ingest/read APIs with account, region, name, and time filters plus
+  pagination; only analysts and administrators may ingest.
+- [x] Add an SQS Lambda handler that reports per-message failures for retry, and provide separate
+  delivery and processing DLQs in opt-in Terraform.
+- [x] Generate local synthetic CloudTrail records with an explicit synthetic marker.
+- [x] Routine validation does not require AWS credentials or paid AWS services.
 
 ## Repository layout
 
@@ -69,6 +76,7 @@ backend/
   app/
     api/                 Versioned API routes and authentication
     core/                Settings and token/password security
+    ingestion/           CloudTrail normalization, persistence, and SQS worker
     models/              SQLAlchemy entities
     schemas/             Validated API contracts
     database.py          Database engine and session dependency
@@ -78,6 +86,8 @@ backend/
 frontend/
   app/                   Next.js dashboard
   Dockerfile
+infrastructure/terraform/modules/
+  cloudtrail-event-pipeline/  Opt-in EventBridge/SQS resources
 docker-compose.yml       Local PostgreSQL + API + frontend
 .env.example             Local configuration template (no credentials)
 ```
@@ -102,7 +112,33 @@ docker compose exec api python -m app.scripts.create_admin
 ```
 
 The dashboard currently reports application/database health only. There are no AWS accounts,
-events, alerts, or incidents until later phases are implemented.
+alerts, or incidents until later phases are implemented. Phase 2 events can be populated locally
+with synthetic-only data:
+
+```bash
+docker compose exec api python -m app.scripts.generate_sample_events --count 8
+```
+
+Ingest or query normalized events using the authenticated API:
+
+```text
+POST /api/v1/events/ingest
+GET  /api/v1/events?account_id=111122223333&region=us-east-1&limit=50&offset=0
+GET  /api/v1/events/{event_id}
+```
+
+The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
+Administrator or Security Analyst token. Read access requires authentication. The local synthetic
+generator inserts into the configured database and marks records as synthetic; do not confuse those
+records with AWS telemetry.
+
+The event worker is packaged with `backend/Dockerfile.worker`, using
+`app.ingestion.worker.lambda_handler`. For SQS-triggered Lambda, enable `ReportBatchItemFailures` on the event-source mapping so failed records are retried
+independently. The opt-in Terraform module at
+[`infrastructure/terraform/modules/cloudtrail-event-pipeline`](./infrastructure/terraform/modules/cloudtrail-event-pipeline)
+creates an account-filtered CloudTrail management-event rule, encrypted SQS queue, processor DLQ,
+and EventBridge delivery DLQ. It does not deploy or wire the Lambda consumer. Cross-account event
+forwarding and account trust are separate setup. No Terraform is applied automatically.
 
 To run backend tests locally:
 
@@ -113,8 +149,7 @@ pip install -r backend/requirements-dev.txt
 cd backend && python -m pytest
 ```
 
-No AWS credentials are needed for tests. The AWS SDK and infrastructure are intentionally not part
-of Phase 1.
+No AWS credentials are needed for tests. Live AWS collector deployment is not part of Phase 2.
 
 ## AWS access, permissions, and cost approach
 
@@ -128,8 +163,9 @@ requires narrowly scoped EventBridge target permissions and SQS queue resource p
 actions will be generated from implemented calls and reviewed before publishing a policy. No
 response permissions will be combined with monitoring permissions.
 
-**Cost:** Phase 1 AWS cost is **$0** (local containers only); local compute/storage are outside AWS
-billing. No infrastructure is auto-deployed. Future costs depend on account/region count, CloudTrail
+**Cost:** Local development and tests cost **$0 in AWS** (containers run locally); local
+compute/storage are outside AWS billing. The Terraform module is opt-in and not deployed. Future
+costs depend on account/region count, CloudTrail
 data-event volume, GuardDuty/Security Hub/Config enablement and billing plans, EventBridge/SQS
 throughput, retention, and database sizing. Those metered services can incur charges even when the
 application is idle. Before any deployment, a region- and volume-specific estimate, budget alarm,
@@ -144,5 +180,7 @@ future deployment is represented as a quote or included in this repository yet.
   deployment hardening yet. Do not expose it directly to the internet.
 - The API uses bearer tokens (no browser cookie session); production frontend hosting should use
   TLS and a reviewed token/session strategy.
-- AWS integration, event schemas, detections, incident handling, Terraform, and notification
-  delivery are not implemented yet and are not claimed to work.
+- Direct AWS event delivery/deployment has not been configured or verified in a real AWS account.
+  The Terraform module defines a queue/rule pattern; it is not a deployed AWS integration.
+- Detection rules, alerts, incident handling, GuardDuty, and notification delivery remain future
+  phases. The event API and SQS worker persist normalized events only; they do not declare incidents.

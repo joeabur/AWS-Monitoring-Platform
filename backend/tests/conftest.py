@@ -12,11 +12,12 @@ from sqlalchemy.pool import StaticPool
 from app.core.security import hash_password
 from app.database import get_db
 from app.main import app
-from app.models.user import Base, User
+from app.models import User
+from app.models.user import Base
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
+def db_session() -> Generator[Session, None, None]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -24,30 +25,39 @@ def client() -> Generator[TestClient, None, None]:
     )
     Base.metadata.create_all(engine)
     test_session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session = test_session()
+    session.add_all(
+        [
+            User(
+                email="admin@example.com",
+                password_hash=hash_password("correct-horse-battery"),
+                role="administrator",
+            ),
+            User(
+                email="analyst@example.com",
+                password_hash=hash_password("correct-horse-battery"),
+                role="security_analyst",
+            ),
+            User(
+                email="viewer@example.com",
+                password_hash=hash_password("correct-horse-battery"),
+                role="read_only_viewer",
+            ),
+        ]
+    )
+    session.commit()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
+
+@pytest.fixture
+def client(db_session: Session) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
-        session = test_session()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    with test_session() as session:
-        session.add_all(
-            [
-                User(
-                    email="admin@example.com",
-                    password_hash=hash_password("correct-horse-battery"),
-                    role="administrator",
-                ),
-                User(
-                    email="viewer@example.com",
-                    password_hash=hash_password("correct-horse-battery"),
-                    role="read_only_viewer",
-                ),
-            ]
-        )
-        session.commit()
+        yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
     try:
@@ -55,5 +65,3 @@ def client() -> Generator[TestClient, None, None]:
             yield test_client
     finally:
         app.dependency_overrides.clear()
-        Base.metadata.drop_all(engine)
-        engine.dispose()

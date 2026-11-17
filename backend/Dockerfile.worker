@@ -1,0 +1,7 @@
+FROM public.ecr.aws/lambda/python:3.12
+
+COPY requirements-worker.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir -r requirements-worker.txt
+COPY app ${LAMBDA_TASK_ROOT}/app
+
+CMD ["app.ingestion.worker.lambda_handler"]

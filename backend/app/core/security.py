@@ -25,7 +25,7 @@ def create_access_token(user_id: UUID) -> str:
     expires_at = now + timedelta(minutes=settings.jwt_expire_minutes)
     return jwt.encode(
         {"sub": str(user_id), "iat": now, "exp": expires_at},
-        settings.jwt_secret_key.get_secret_value(),
+        settings.require_jwt_secret(),
         algorithm=ALGORITHM,
     )
 
@@ -34,7 +34,7 @@ def decode_access_token(token: str) -> UUID:
     settings = get_settings()
     payload = jwt.decode(
         token,
-        settings.jwt_secret_key.get_secret_value(),
+        settings.require_jwt_secret(),
         algorithms=[ALGORITHM],
         options={"require": ["sub", "exp"]},
     )

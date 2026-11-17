@@ -59,5 +59,6 @@ def test_administrator_can_list_users(client) -> None:
     assert response.status_code == 200
     assert [user["role"] for user in response.json()] == [
         "administrator",
+        "security_analyst",
         "read_only_viewer",
     ]
