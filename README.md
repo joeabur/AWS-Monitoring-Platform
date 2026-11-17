@@ -38,7 +38,7 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 | 5 — AWS integrations (complete) | STS account health/region discovery; GuardDuty, Security Hub, and Config finding sync/status; EventBridge/SQS routing |
 | 6 — Operations UI and notifications (complete) | Real-event metrics and filters, incident investigation UI, Slack/Teams/email outbox and delivery health |
 | 7 — Auditor integration (complete) | Schema-v1 JSON report import, audit history, and resource correlation with incidents/dashboard |
-| 8 — Controlled response | Detection-only by default; dry-run, analyst approval, separate permissions, audited playbooks |
+| 8 — Controlled response (complete, limited) | Detection-only by default; independently approved dry-run/live IAM access-key disable playbook with separate role and audit trail |
 | 9 — Production readiness | Threat/security review, load/reliability tests, CI, Terraform and operational guides |
 
 ### MVP boundary
@@ -136,6 +136,16 @@ versioned as code.
 - [x] Correlate findings to incidents only on exact account and resource identifiers (including resource-ID suffixes from matching ARNs); show latest matching control/resource observations in incident investigation.
 - [x] Display the latest imported report and its failing/unknown findings in the dashboard, clearly separate from continuous monitoring incidents.
 - [x] Test schema rejection, role authorization, duplicate imports, masked account preservation, historical status changes, and incident/dashboard correlation using synthetic reports.
+
+### Phase 8 — Controlled response (complete, limited)
+
+- [x] Keep response actions disabled by default; require an explicit live-enable flag and an explicit dry-run disable before any AWS write.
+- [x] Add an incident-evidence-bound IAM access-key deactivation playbook; the key ID must appear in linked CloudTrail evidence and the target username is derived from that evidence.
+- [x] Require a different Administrator or Security Analyst to approve/reject a request; only an Administrator can execute an approved action.
+- [x] Use a separate cross-account response role, verify the assumed AWS account, and require the target IAM username to be explicitly allowlisted.
+- [x] Persist action requests, decisions, dry-run/live outcomes, sanitized failure codes, and actor-attributed append-only audit entries.
+- [x] Test approval separation, evidence binding, disabled/live configuration gates, per-account allowlisting, dry-run behavior, assumed-role identity verification, and the narrowly scoped AWS API call with mocked clients.
+- [ ] EC2 isolation, session revocation, and additional playbooks remain future work; no generic command execution is supported.
 
 ## Repository layout
 
@@ -301,6 +311,13 @@ POST /api/v1/audit-reports/import
 GET  /api/v1/audit-reports?account_id=111122223333&limit=50&offset=0
 GET  /api/v1/audit-reports/{report_id}
 GET  /api/v1/audit-findings?status=FAIL&severity=high&resource_id=sg-0123456789abcdef0
+GET  /api/v1/response/playbooks
+GET  /api/v1/response/actions?incident_id=...
+POST /api/v1/response/actions
+POST /api/v1/response/actions/{action_id}/approve
+POST /api/v1/response/actions/{action_id}/reject
+POST /api/v1/response/actions/{action_id}/execute
+GET  /api/v1/response/actions/{action_id}
 GET  /api/v1/accounts
 GET  /api/v1/accounts/{account_id}/health
 GET  /api/v1/findings?provider=guardduty&severity=high&limit=50&offset=0
@@ -340,6 +357,60 @@ The auditor's signature manifest is not verified by this API. A content hash is 
 duplicate detection and is not proof of authenticity. Before uploading a signed report, verify its
 manifest using the auditor's verification command and a trusted public key distributed out of band.
 No live auditor service, AWS account, or third-party notification service is called by this import.
+
+### Controlled response (Phase 8)
+
+The only implemented playbook is `disable_access_key`. It sets an IAM access key to `Inactive`
+when the key ID is present in the linked incident's retained CloudTrail evidence. The target IAM
+username is derived from the recorded key-creation or key-use event; clients cannot choose an
+arbitrary username or AWS operation. Requests against closed incidents or keys absent from evidence
+are rejected.
+
+Response is detection-only by default:
+
+- `RESPONSE_ACTIONS_ENABLED=false`
+- `RESPONSE_DRY_RUN=true`
+- Each monitored account must separately configure `response_role_arn`,
+  `response_external_id`, and `response_allowed_iam_users` before live use.
+- An action requester cannot approve their own request. Only an Administrator can execute an
+  approved request. Dry-run execution records the planned `iam:UpdateAccessKey` operation without
+  contacting AWS.
+- Live execution additionally requires both explicit flags (`RESPONSE_ACTIONS_ENABLED=true` and
+  `RESPONSE_DRY_RUN=false`), an allowlisted target user, and the separately assumed response role.
+  The platform verifies `sts:GetCallerIdentity` matches the incident account before the IAM write.
+
+Example account configuration (keep the external ID secret and set allowlisted user names to the
+smallest feasible set):
+
+```json
+[
+  {
+    "account_id": "111122223333",
+    "name": "production",
+    "role_arn": "arn:aws:iam::111122223333:role/CloudSecurityMonitoringReadOnly",
+    "response_role_arn": "arn:aws:iam::111122223333:role/CloudSecurityMonitoringResponse",
+    "response_external_id": "<separate-response-external-id>",
+    "response_allowed_iam_users": ["compromised-user"]
+  }
+]
+```
+
+The platform runtime needs `sts:AssumeRole` only on the configured response role. That distinct
+role's trust policy should name only the platform runtime identity and require the response external
+ID. Its permissions should contain `iam:UpdateAccessKey` only, with `Resource` restricted to the
+allowlisted IAM user ARNs, for example
+`arn:aws:iam::111122223333:user/compromised-user`; do not reuse the monitoring role or grant
+administrative access. The response role, external ID, and allowlist are never returned by account
+APIs.
+
+Every request, approval/rejection, blocked attempt, dry-run, and live outcome is stored with its
+actor, target, reason/result, and timestamp. For key-creation evidence that does not contain the
+target user's exact ARN, the ARN is left unset rather than inferred. Live AWS failures record only a
+sanitized error code; IAM write operations are configured for a single attempt. Disabling a key can interrupt workloads;
+rollback requires a separate authorized decision to reactivate that key, and the platform does not
+perform rollback automatically. Tests use mocked STS/IAM clients; no live AWS write has been made.
+EC2 quarantine, session revocation, ticketing, and response-action frontend controls are not yet
+implemented.
 
 The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
 Administrator or Security Analyst token. Read access requires authentication. The local synthetic
@@ -447,4 +518,5 @@ future deployment is represented as a quote or included in this repository yet.
 - Notifications and a persisted-data operations dashboard are implemented, but notification
   dispatch requires explicit administrator/CLI invocation or an externally configured schedule.
 - Auditor-report JSON import is implemented, but signed-manifest verification is an offline operator
-  responsibility. Response actions are not implemented; response remains detection-only.
+  responsibility. The access-key playbook is gated and opt-in; additional response playbooks remain
+  future work.

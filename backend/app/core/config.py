@@ -1,4 +1,5 @@
 import ipaddress
+import re
 from functools import lru_cache
 from urllib.parse import urlsplit
 
@@ -11,23 +12,45 @@ class MonitoredAwsAccount(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     role_arn: str | None = None
     external_id: SecretStr | None = None
+    response_role_arn: str | None = None
+    response_external_id: SecretStr | None = None
+    response_allowed_iam_users: list[str] = Field(default_factory=list, max_length=1000)
 
     @model_validator(mode="after")
     def validate_role(self) -> "MonitoredAwsAccount":
-        if self.role_arn is not None:
-            parts = self.role_arn.split(":", 5)
-            if (
-                len(parts) != 6
-                or parts[0] != "arn"
-                or parts[1] not in {"aws", "aws-us-gov", "aws-cn"}
-                or parts[2] != "iam"
-                or parts[4] != self.account_id
-                or not parts[5].startswith("role/")
-                or len(parts[5]) == len("role/")
-            ):
-                raise ValueError("role_arn must be an IAM role ARN in the configured account")
-        elif self.external_id is not None:
+        for field_name in ("role_arn", "response_role_arn"):
+            role_arn = getattr(self, field_name)
+            if role_arn is not None:
+                parts = role_arn.split(":", 5)
+                if (
+                    len(parts) != 6
+                    or parts[0] != "arn"
+                    or parts[1] not in {"aws", "aws-us-gov", "aws-cn"}
+                    or parts[2] != "iam"
+                    or parts[4] != self.account_id
+                    or not parts[5].startswith("role/")
+                    or len(parts[5]) == len("role/")
+                ):
+                    raise ValueError(
+                        f"{field_name} must be an IAM role ARN in the configured account"
+                    )
+        if self.external_id is not None and self.role_arn is None:
             raise ValueError("external_id requires role_arn")
+        if self.response_external_id is not None and self.response_role_arn is None:
+            raise ValueError("response_external_id requires response_role_arn")
+        if self.response_role_arn is not None and self.response_external_id is None:
+            raise ValueError("response_role_arn requires a separate response_external_id")
+        if self.response_role_arn == self.role_arn and self.response_role_arn is not None:
+            raise ValueError("monitoring and response roles must be separate IAM roles")
+        if self.response_allowed_iam_users and self.response_role_arn is None:
+            raise ValueError("response_allowed_iam_users requires response_role_arn")
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9+=,.@_-]{1,128}", user_name)
+            for user_name in self.response_allowed_iam_users
+        ):
+            raise ValueError("response_allowed_iam_users contains an invalid IAM username")
+        if len(set(self.response_allowed_iam_users)) != len(self.response_allowed_iam_users):
+            raise ValueError("response_allowed_iam_users cannot contain duplicates")
         return self
 
 
@@ -43,6 +66,8 @@ class Settings(BaseSettings):
     trusted_ip_cidrs: str = ""
     sensitive_resource_arns: str = ""
     monitored_aws_accounts: list[MonitoredAwsAccount] = Field(default_factory=list)
+    response_actions_enabled: bool = False
+    response_dry_run: bool = True
     notification_min_severity: str = "high"
     slack_webhook_url: SecretStr | None = None
     teams_webhook_url: SecretStr | None = None

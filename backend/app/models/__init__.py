@@ -4,6 +4,7 @@ from app.models.aws_integration import AwsFinding, AwsIntegrationHealth
 from app.models.event import CloudTrailEvent
 from app.models.incident import Incident, IncidentAlert, IncidentAuditEntry, InvestigationNote
 from app.models.notification import NotificationDelivery
+from app.models.response import ResponseAction, ResponseActionAuditEntry
 from app.models.user import User
 
 __all__ = [
@@ -18,5 +19,7 @@ __all__ = [
     "IncidentAuditEntry",
     "InvestigationNote",
     "NotificationDelivery",
+    "ResponseAction",
+    "ResponseActionAuditEntry",
     "User",
 ]

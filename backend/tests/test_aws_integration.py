@@ -296,6 +296,9 @@ def test_account_api_hides_role_details_and_ingests_guardduty(client, monkeypatc
         name="production",
         role_arn="arn:aws:iam::111122223333:role/MonitoringReadOnly",
         external_id="do-not-return",
+        response_role_arn="arn:aws:iam::111122223333:role/MonitoringResponse",
+        response_external_id="response-do-not-return",
+        response_allowed_iam_users=["compromised-user"],
     )
     finding = {
         "Id": "guardduty-finding-api",
@@ -394,6 +397,7 @@ def test_account_api_hides_role_details_and_ingests_guardduty(client, monkeypatc
         }
     ]
     assert "do-not-return" not in accounts.text
+    assert "MonitoringResponse" not in accounts.text
     assert health.json()["regions"] == ["us-east-1", "us-west-2"]
     assert synced.status_code == 200
     assert synced.json()["fetched"] == 1

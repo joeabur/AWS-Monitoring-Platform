@@ -12,6 +12,7 @@ from app.api.events import router as events_router
 from app.api.findings import router as findings_router
 from app.api.incidents import router as incidents_router
 from app.api.notifications import router as notifications_router
+from app.api.response import router as response_router
 from app.api.routes import router
 from app.core.config import get_settings
 
@@ -44,3 +45,4 @@ app.include_router(findings_router)
 app.include_router(detections_router)
 app.include_router(incidents_router)
 app.include_router(notifications_router)
+app.include_router(response_router)
