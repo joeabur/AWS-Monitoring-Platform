@@ -29,6 +29,94 @@ FastAPI serves the analyst UI and APIs, not the AWS event polling loop. AWS acce
 standard boto3 credential chain locally and STS-assumed, read-only roles for monitored accounts.
 Response actions are opt-in and use a separate narrowly-scoped role.
 
+## Architecture and workflow diagram
+
+The diagram shows both the implemented application paths and the AWS deployment components that
+remain opt-in. AWS resources are **not deployed by this repository**; the EventBridge/SQS Terraform
+module is available for a reviewed deployment, and its worker/database wiring is an operator task.
+
+```mermaid
+flowchart LR
+    subgraph AWS["AWS monitored accounts (not deployed/configured automatically)"]
+        AWS_ENV["Monitored AWS accounts"]
+        CT["CloudTrail management events"]
+        GD["GuardDuty findings"]
+        SH["Security Hub findings"]
+        CFG["AWS Config compliance changes"]
+        READ["Read-only collectors<br/>STS AssumeRole + account/region checks"]
+        RESP["Separate response role<br/>iam:UpdateAccessKey only"]
+        CT --> EB["EventBridge rules<br/>(opt-in Terraform)"]
+        GD --> EB
+        SH --> EB
+        CFG --> EB
+        READ -. "manual bounded sync" .-> API
+    end
+
+    subgraph DELIVERY["Durable delivery (infrastructure available; deployment gated)"]
+        EB --> Q["Encrypted SQS queue"]
+        Q --> WORKER["Isolated event worker<br/>SQS partial-batch retries"]
+        EB -. "delivery failures" .-> DDLQ["EventBridge delivery DLQ"]
+        Q -. "processing failures" .-> PDLQ["SQS processing DLQ"]
+    end
+
+    subgraph APP["Monitoring platform (local Compose / application services)"]
+        API["FastAPI<br/>auth, RBAC, APIs"]
+        NORM["Normalize, redact,<br/>deduplicate, enrich context"]
+        DET["Detection rules<br/>thresholds and correlation"]
+        DB[("PostgreSQL<br/>events, alerts, incidents,<br/>findings, audit records, outbox")]
+        INCIDENT["Incident workflow<br/>evidence, timeline, assignment,<br/>notes and status audit"]
+        OUTBOX["Notification outbox<br/>bounded retries"]
+        DELIVERY_SERVICE["Slack / Teams / SMTP<br/>(optional configuration)"]
+        UI["Next.js SOC dashboard"]
+        AUDIT_TOOL["AWS Security Auditing Tool<br/>independent point-in-time reports"]
+        IMPORT["Authenticated schema-v1<br/>report import and exact matching"]
+        RETENTION["Event retention CLI<br/>90-day default; dry-run first;<br/>keeps alert-linked evidence"]
+    end
+
+    USERS["Analysts / administrators / viewers"]
+    RESPONSE_FLOW["Independent approval<br/>and Administrator execution"]
+    MONITOR_ROLE["Read-only monitoring role"]
+
+    WORKER --> NORM
+    API --> NORM
+    NORM --> DB
+    NORM --> DET
+    DET --> DB
+    DET --> INCIDENT
+    INCIDENT --> DB
+    INCIDENT --> OUTBOX
+    OUTBOX --> DB
+    OUTBOX --> DELIVERY_SERVICE
+    USERS <--> UI
+    UI <--> API
+    API <--> DB
+    AUDIT_TOOL -->|"signed report verified offline"| IMPORT
+    IMPORT --> DB
+    IMPORT -. "account/resource correlation" .-> INCIDENT
+    DB --> RETENTION
+    API --> RESPONSE_FLOW
+    RESPONSE_FLOW -->|"only if explicitly enabled;<br/>dry-run default"| RESP
+    RESP -->|"approved key deactivation"| AWS_ENV
+    READ --> MONITOR_ROLE
+    MONITOR_ROLE --> AWS_ENV
+
+    classDef deployed fill:#e8f5e9,stroke:#388e3c,color:#1b5e20;
+    classDef gated fill:#fff3e0,stroke:#ef6c00,color:#7f3b00,stroke-dasharray:5 5;
+    classDef optional fill:#e3f2fd,stroke:#1976d2,color:#0d47a1;
+    class API,NORM,DET,DB,INCIDENT,OUTBOX,UI,IMPORT,RETENTION deployed;
+    class EB,Q,WORKER,DDLQ,PDLQ,CT,GD,SH,CFG,READ,MONITOR_ROLE gated;
+    class DELIVERY_SERVICE,AUDIT_TOOL,RESP,RESPONSE_FLOW optional;
+```
+
+**End-to-end flow:** AWS service events can be routed through EventBridge and SQS into an isolated
+worker; authenticated API ingestion and bounded AWS finding sync are also available. The ingestion
+pipeline normalizes and deduplicates events, evaluates versioned rules, persists evidence and alerts,
+and groups related alerts into incidents. Analysts review incidents in the dashboard and may record
+notes, assignments, and status changes. Eligible alerts enter a deduplicated notification outbox.
+Auditor reports are imported separately and correlated only on exact account/resource matches.
+Response actions require incident evidence and independent approval; live access-key deactivation
+uses the separate response role and remains disabled by default.
+
 | Phase | Deliverable |
 |---|---|
 | 1 — Foundation (complete) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
