@@ -272,32 +272,102 @@ docker-compose.yml       Local PostgreSQL + API + frontend
 .env.example             Local configuration template (no credentials)
 ```
 
-## Run locally
+## Getting started
 
-Requirements: Docker Compose (or Python 3.12+ and Node.js 20+ for running services separately).
+### Hardware requirements
+
+For local development with Docker Compose (API, frontend, and PostgreSQL):
+
+| Resource | Minimum | Recommended |
+|---|---:|---:|
+| CPU | 2 cores | 4 cores |
+| Memory available to Docker | 4 GB | 8 GB |
+| Free disk space | 10 GB | 20 GB or more |
+
+These are starting points for a small local demo, not production capacity guarantees. Frontend image
+builds and larger event datasets need additional memory and disk. Production sizing depends on
+accounts, regions, event volume, retention, and availability requirements.
+
+### Prerequisites
+
+- Docker Engine or Docker Desktop with Docker Compose v2.20 or newer.
+- Git, to clone the repository.
+- A terminal and a browser.
+- Internet access for the initial container image and dependency downloads.
+
+No AWS account, AWS credentials, or paid AWS services are needed to run the local demo or test suite.
+The default Compose stack uses PostgreSQL locally and creates no cloud resources.
+
+To run services directly on your machine instead of using Docker, install Python 3.12+, Node.js 22+,
+and PostgreSQL 16+, then follow the dependency manifests in `backend/requirements-dev.txt` and
+`frontend/package-lock.json`. The commands below use the recommended Docker setup.
+
+### Install and configure
+
+Clone the repository and create a local environment file:
 
 ```bash
+git clone https://github.com/joeabur/AWS-Monitoring-Platform.git
+cd AWS-Monitoring-Platform
 cp .env.example .env
-python -c 'import secrets; print(secrets.token_hex(32))'
-# Put that output in .env as JWT_SECRET_KEY.
-docker compose up --build
 ```
 
-Open the dashboard at <http://localhost:3000>; API docs are at <http://localhost:8000/docs> and
-health at <http://localhost:8000/api/v1/health>. There is intentionally no default administrator.
-After Compose is running, create the first administrator interactively:
+On Windows PowerShell, use `Copy-Item .env.example .env` instead of `cp`. Generate a unique local
+JWT secret:
+
+```bash
+python -c 'import secrets; print(secrets.token_hex(32))'
+```
+
+Copy the output into `.env` as the value of `JWT_SECRET_KEY`. Keep `.env` private and out of source
+control. For local Compose, the example file already selects the local PostgreSQL service, local
+frontend/API URLs, development mode, and an empty AWS account list. Do not set production mode for
+the local stack.
+
+### Start the application
+
+From the repository root:
+
+```bash
+docker compose config
+docker compose up --build --detach --wait
+docker compose ps
+```
+
+The API container applies database migrations on startup in this single-instance local setup.
+There is intentionally no default administrator. Create one interactively:
 
 ```bash
 docker compose exec api python -m app.scripts.create_admin
 ```
 
-The dashboard reports persisted backend data; it does not fabricate AWS telemetry. Configure AWS
-accounts to use the authenticated sync APIs. Phase 2 events can also be populated locally with
-synthetic-only data, visibly marked in the events table, which can generate alerts and incidents:
+Enter an email address and a unique password of at least 12 characters when prompted. Then open:
+
+- Dashboard: <http://localhost:3000>
+- API documentation: <http://localhost:8000/docs>
+- Health check: <http://localhost:8000/api/v1/health>
+
+Sign in to the dashboard with the administrator account you created. Generate clearly marked
+synthetic events to explore event, alert, and incident flows:
 
 ```bash
 docker compose exec api python -m app.scripts.generate_sample_events --count 8
 ```
+
+Synthetic records are demo data, not AWS telemetry. To stop the containers while retaining the
+local PostgreSQL data volume, run `docker compose down`. To also permanently remove the local
+database volume and its data, run `docker compose down --volumes`.
+
+### Troubleshooting
+
+- If Compose reports that `JWT_SECRET_KEY` is missing, verify `.env` exists in the repository root
+  and that the secret was copied onto the `JWT_SECRET_KEY=` line.
+- Check service state and startup errors with `docker compose ps` and
+  `docker compose logs api db frontend`.
+- If ports 3000 or 8000 are already in use, stop the conflicting service or change the host-side
+  port mappings in `docker-compose.yml`.
+- The default UI has no AWS events until you generate synthetic data or configure real AWS
+  integrations. AWS account setup is optional; see [Configure AWS accounts](#configure-aws-accounts-phase-5).
 
 ### Configure AWS accounts (Phase 5)
 
