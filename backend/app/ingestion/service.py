@@ -11,6 +11,7 @@ from app.detections.engine import DetectionMatch, evaluate_event
 from app.incidents.correlation import attach_alert_to_incident
 from app.ingestion.cloudtrail import normalize_cloudtrail_event
 from app.models import AwsFinding, CloudTrailEvent, DetectionAlert
+from app.notifications.service import enqueue_alert_notifications
 
 
 @dataclass(frozen=True)
@@ -300,10 +301,12 @@ def ingest_cloudtrail_event(
                 .limit(1000)
             ).all()
         )
-        matches = evaluate_event(record, context, get_settings())
+        settings = get_settings()
+        matches = evaluate_event(record, context, settings)
         alerts = _save_alerts(db, record, context, matches)
         for alert in alerts:
-            attach_alert_to_incident(db, alert)
+            incident = attach_alert_to_incident(db, alert)
+            enqueue_alert_notifications(db, alert, incident, settings)
         db.commit()
         db.refresh(record)
         for alert in alerts:

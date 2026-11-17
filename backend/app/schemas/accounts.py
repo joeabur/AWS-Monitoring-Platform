@@ -12,6 +12,7 @@ class AwsAccountRead(BaseModel):
 class IntegrationHealthRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    account_id: str
     integration: str
     region: str
     status: str

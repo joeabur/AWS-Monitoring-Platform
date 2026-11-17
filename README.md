@@ -34,7 +34,7 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 | 3 — Detection (complete) | 15 initial rules plus high-severity Security Hub coverage; thresholds, persisted deduplicated alerts, explicit risk-score basis, and rule testing |
 | 4 — Incidents (complete) | Alert grouping, evidence and event timeline, incident lifecycle, assignment, notes, audit trail |
 | 5 — AWS integrations (complete) | STS account health/region discovery; GuardDuty, Security Hub, and Config finding sync/status; EventBridge/SQS routing |
-| 6 — Operations UI and notifications | Real-event metrics, filters, Slack/Teams/email routing, delivery health |
+| 6 — Operations UI and notifications (complete) | Real-event metrics and filters, incident investigation UI, Slack/Teams/email outbox and delivery health |
 | 7 — Auditor integration | Schema-v1 JSON report import and correlation with current events |
 | 8 — Controlled response | Detection-only by default; dry-run, analyst approval, separate permissions, audited playbooks |
 | 9 — Production readiness | Threat/security review, load/reliability tests, CI, Terraform and operational guides |
@@ -117,6 +117,15 @@ versioned as code.
 - [x] Route CloudTrail management events and GuardDuty, Security Hub, and Config findings through
   the opt-in EventBridge/SQS module with delivery and processing DLQs.
 
+### Phase 6 — Operations dashboard and notifications (complete)
+
+- [x] Replace the foundation health screen with an authenticated SOC dashboard backed by persisted events, alerts, incidents, finding events, AWS integration checks, and notification delivery records.
+- [x] Add time, account, region, and severity filters plus incident/event queues, severity and rule summaries, resource/identity/IP context, and AWS connection health.
+- [x] Provide an incident investigation view with linked alerts and event evidence, timeline, analyst notes, and role-gated status updates.
+- [x] Add an idempotent notification outbox with severity thresholding, Slack/Teams HTTPS webhooks, TLS-protected SMTP, retry backoff, and delivery status APIs. Configuration responses do not reveal channel secrets.
+- [x] Keep session tokens in memory in the frontend; viewers can investigate read-only while administrators and analysts can update status and add notes.
+- [x] Validate dashboard queries, outbox deduplication/retries, API permissions, migrations, frontend types, and production build without live provider calls.
+
 ## Repository layout
 
 ```text
@@ -162,9 +171,9 @@ After Compose is running, create the first administrator interactively:
 docker compose exec api python -m app.scripts.create_admin
 ```
 
-The dashboard currently reports application/database health only; it does not yet render AWS
-account or event metrics. Configure AWS accounts to use the authenticated sync APIs. Phase 2 events
-can also be populated locally with synthetic-only data, which can generate alerts and incidents:
+The dashboard reports persisted backend data; it does not fabricate AWS telemetry. Configure AWS
+accounts to use the authenticated sync APIs. Phase 2 events can also be populated locally with
+synthetic-only data, visibly marked in the events table, which can generate alerts and incidents:
 
 ```bash
 docker compose exec api python -m app.scripts.generate_sample_events --count 8
@@ -282,6 +291,11 @@ GET  /api/v1/findings?provider=guardduty&severity=high&limit=50&offset=0
 POST /api/v1/accounts/{account_id}/sync/guardduty?region=us-east-1&limit=25
 POST /api/v1/accounts/{account_id}/sync/security-hub?region=us-east-1&limit=25
 POST /api/v1/accounts/{account_id}/sync/config?region=us-east-1&limit=25
+GET  /api/v1/dashboard/summary?since=...&until=...&account_id=...&region=...&severity=...
+GET  /api/v1/notifications/config
+GET  /api/v1/notifications?status=failed&channel=slack
+POST /api/v1/notifications/process
+POST /api/v1/notifications/{delivery_id}/retry
 ```
 
 The ingest route accepts a CloudTrail record or EventBridge event envelope and requires an
@@ -310,6 +324,29 @@ reopened only when new matching evidence arrives (or a new incident is created f
 group). The incident detail API provides alert and event evidence, analyst notes, audit entries, and
 a timestamp-sorted timeline. Assignment and lifecycle changes are restricted to administrators and
 security analysts; notes and action history are append-only.
+
+### Dashboard and notification operations (Phase 6)
+
+`GET /api/v1/dashboard/summary` defaults to the preceding 24 hours and accepts timezone-qualified
+`since`/`until` bounds plus account, region, and severity filters. Metrics and event/incident lists
+come from persisted application data. Top source IPs, identities, and resources are summarized from
+up to the latest 500 matching alerts. The dashboard identifies synthetic events explicitly.
+
+Notifications are disabled unless at least one channel is configured. Set
+`NOTIFICATION_MIN_SEVERITY` (`critical`, `high`, `medium`, `low`, or `informational`) and optionally
+configure `SLACK_WEBHOOK_URL`, `TEAMS_WEBHOOK_URL`, or SMTP host/port/username/password/from/to
+values in the API environment. Webhooks must use HTTPS. SMTP uses STARTTLS by default and implicit
+TLS on port 465. Secrets are environment configuration and are never returned by the notification
+configuration endpoint. Generated messages contain alert summaries, not raw event evidence.
+
+Eligible alerts are enqueued transactionally with ingestion and deduplicated per alert/channel.
+Delivery runs only when an administrator calls `POST /api/v1/notifications/process` or invokes
+`python -m app.scripts.dispatch_notifications` from the backend environment. The dispatcher
+retries failed sends with bounded exponential backoff; after five attempts a delivery is marked
+failed and can be re-queued by an administrator. **No scheduler or dedicated notification worker is
+currently provisioned**, so deployments must schedule the CLI/API operation themselves if periodic
+delivery is desired. Transport unit tests use injected senders; no live Slack, Teams, or SMTP
+service has been contacted.
 
 The event worker is packaged with `backend/Dockerfile.worker`, using
 `app.ingestion.worker.lambda_handler`. For SQS-triggered Lambda, enable `ReportBatchItemFailures` on the event-source mapping so failed records are retried
@@ -364,4 +401,6 @@ future deployment is represented as a quote or included in this repository yet.
 - Integration health reflects the most recent AWS health check or manual service sync; finding
   status reflects the newest provider update observed. Neither proves source services are
   comprehensively configured or that no events were missed.
-- There are no notifications, response actions, or live detection dashboards yet.
+- Notifications and a persisted-data operations dashboard are implemented, but notification
+  dispatch requires explicit administrator/CLI invocation or an externally configured schedule.
+- Auditor-report import and response actions are not implemented yet; response remains detection-only.

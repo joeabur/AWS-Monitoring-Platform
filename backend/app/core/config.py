@@ -1,5 +1,6 @@
 import ipaddress
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,6 +43,61 @@ class Settings(BaseSettings):
     trusted_ip_cidrs: str = ""
     sensitive_resource_arns: str = ""
     monitored_aws_accounts: list[MonitoredAwsAccount] = Field(default_factory=list)
+    notification_min_severity: str = "high"
+    slack_webhook_url: SecretStr | None = None
+    teams_webhook_url: SecretStr | None = None
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    notification_email_from: str | None = None
+    notification_email_to: str = ""
+
+    @field_validator("notification_min_severity")
+    @classmethod
+    def validate_notification_min_severity(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"critical", "high", "medium", "low", "informational"}:
+            raise ValueError("notification_min_severity is invalid")
+        return normalized
+
+    @field_validator("slack_webhook_url", "teams_webhook_url")
+    @classmethod
+    def empty_webhook_is_not_configured(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not value.get_secret_value().strip():
+            return None
+        if value is not None:
+            try:
+                parsed = urlsplit(value.get_secret_value())
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username
+                    or parsed.password
+                ):
+                    raise ValueError
+            except ValueError as exc:
+                raise ValueError(
+                    "Notification webhook URLs must use HTTPS and omit credentials"
+                ) from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_notification_delivery_configuration(self) -> "Settings":
+        smtp_fields = (self.smtp_host, self.notification_email_from, self.notification_email_to)
+        if any(smtp_fields) and not all(smtp_fields):
+            raise ValueError(
+                "SMTP_HOST, NOTIFICATION_EMAIL_FROM, and NOTIFICATION_EMAIL_TO are required together"
+            )
+        has_username = bool(self.smtp_username)
+        has_password = self.smtp_password is not None and bool(
+            self.smtp_password.get_secret_value()
+        )
+        if has_username != has_password:
+            raise ValueError("SMTP_USERNAME and SMTP_PASSWORD must be configured together")
+        if (has_username or has_password) and not self.smtp_host:
+            raise ValueError("SMTP credentials require SMTP_HOST")
+        return self
 
     @field_validator("trusted_ip_cidrs")
     @classmethod
