@@ -1,0 +1,49 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #f5f7fb; color: #172338; font-family: Arial, Helvetica, sans-serif; }
+.shell { min-height: 100vh; display: flex; }
+.sidebar { width: 250px; flex: 0 0 250px; background: #101b2c; color: #d7dfeb; padding: 27px 16px 18px; display: flex; flex-direction: column; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 38px; font-size: 15px; font-weight: 700; color: #f5f8fc; }
+.brand-mark { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 8px; color: #0c1b2b; background: #55d6ad; font-size: 15px; }
+.nav-label, .eyebrow, .card-label { letter-spacing: 1.15px; font-size: 10px; font-weight: 700; }
+.nav-label { color: #75839b; padding: 0 11px 12px; }
+.nav-item { display: flex; gap: 12px; align-items: center; padding: 11px; border-radius: 7px; color: #c9d2df; font-size: 13px; margin-bottom: 4px; }
+.nav-item span { width: 15px; color: #92a4bc; font-size: 16px; }
+.nav-item.active { background: #1d3046; color: white; }
+.nav-item.active span { color: #55d6ad; }
+.nav-item.muted { color: #91a0b4; }
+.nav-item small { margin-left: auto; font-size: 9px; color: #77869a; }
+.sidebar-footer { margin-top: auto; border-top: 1px solid #263449; padding: 17px 9px 0; font-size: 11px; color: #9cabc0; display: flex; align-items: center; gap: 9px; }
+.status-dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; background: #44c69c; border-radius: 50%; }
+.status-dot.neutral { background: #929eaf; }
+.content { width: min(1120px, 100%); margin: 0 auto; padding: 36px 48px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+.eyebrow { color: #8692a4; margin: 0 0 8px; }
+h1 { margin: 0; font-size: 27px; letter-spacing: -.5px; }
+.environment { display: flex; align-items: center; gap: 8px; border: 1px solid #dfe5ec; color: #69778a; border-radius: 5px; padding: 8px 10px; font-size: 9px; font-weight: 700; letter-spacing: .7px; }
+.notice { background: #fff8e9; border: 1px solid #f3dfa9; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #735a1a; }
+.notice strong { color: #61490c; font-size: 13px; }
+.section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin: 30px 0 14px; }
+.section-heading h2 { font-size: 15px; margin: 0 0 5px; }
+.section-heading p { color: #8692a4; font-size: 11px; margin: 0; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
+.card { min-height: 135px; background: white; border: 1px solid #e6eaf0; border-radius: 8px; padding: 17px; box-shadow: 0 2px 6px #26344908; }
+.card-label { color: #8290a3; }
+.card-value { margin: 18px 0 13px; font-size: 20px; font-weight: 700; text-transform: capitalize; }
+.card-foot { display: flex; align-items: center; gap: 7px; color: #8490a0; font-size: 10px; }
+.card-foot .status-dot { width: 6px; height: 6px; background: #9ba6b4; }
+.card-foot.good { color: #33896f; }
+.card-foot.good .status-dot { background: #44c69c; }
+.card-foot.danger { color: #b94b4b; }
+.card-foot.danger .status-dot { background: #d85858; }
+.lower { margin-top: 32px; }
+.milestone { background: white; border: 1px solid #e6eaf0; border-radius: 7px; padding: 13px 15px; display: flex; align-items: center; gap: 13px; margin-bottom: 8px; }
+.milestone-check, .milestone-number { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; font-size: 12px; flex: 0 0 auto; }
+.milestone-check { background: #e7f7f1; color: #299575; font-weight: 700; }
+.milestone-number { background: #f0f2f6; color: #7d899a; font-size: 10px; }
+.milestone-copy { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.milestone-copy span { color: #8692a4; font-size: 10px; }
+.tag { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: .5px; }
+.tag.complete { color: #29876d; }
+.tag.planned { color: #8994a4; }
+.error-message { color: #b94b4b; font-size: 12px; }
+@media (max-width: 760px) { .sidebar { width: 64px; flex-basis: 64px; padding: 22px 8px; } .brand { padding: 0 8px 30px; } .brand:not(.brand-mark) { font-size: 0; } .nav-label, .nav-item:not(.active), .nav-item.active { font-size: 0; justify-content: center; padding: 12px 0; } .nav-item span { font-size: 16px; } .nav-item small, .sidebar-footer { display: none; } .content { padding: 25px 20px; } .cards { grid-template-columns: 1fr; } .environment { display: none; } }
