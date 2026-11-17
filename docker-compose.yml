@@ -22,6 +22,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       MONITORED_AWS_ACCOUNTS: "${MONITORED_AWS_ACCOUNTS:-[]}"
+      MIGRATIONS_ON_STARTUP: ${MIGRATIONS_ON_STARTUP:-true}
     depends_on:
       db:
         condition: service_healthy

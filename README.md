@@ -27,7 +27,7 @@ worker → normalization/detection/correlation → PostgreSQL → FastAPI → da
 SQS buffers bursts and permits retries; a dead-letter queue preserves repeatedly failing messages.
 FastAPI serves the analyst UI and APIs, not the AWS event polling loop. AWS access will use the
 standard boto3 credential chain locally and STS-assumed, read-only roles for monitored accounts.
-Response actions, if enabled in a later phase, will use a separate narrowly-scoped role.
+Response actions are opt-in and use a separate narrowly-scoped role.
 
 | Phase | Deliverable |
 |---|---|
@@ -39,7 +39,7 @@ Response actions, if enabled in a later phase, will use a separate narrowly-scop
 | 6 — Operations UI and notifications (complete) | Real-event metrics and filters, incident investigation UI, Slack/Teams/email outbox and delivery health |
 | 7 — Auditor integration (complete) | Schema-v1 JSON report import, audit history, and resource correlation with incidents/dashboard |
 | 8 — Controlled response (complete, limited) | Detection-only by default; independently approved dry-run/live IAM access-key disable playbook with separate role and audit trail |
-| 9 — Production readiness | Threat/security review, load/reliability tests, CI, Terraform and operational guides |
+| 9 — Production readiness (local/CI complete; deployment gated) | CI checks, non-root images, controlled migrations, dependency updates, and operations/readiness guide |
 
 ### MVP boundary
 
@@ -146,6 +146,13 @@ versioned as code.
 - [x] Persist action requests, decisions, dry-run/live outcomes, sanitized failure codes, and actor-attributed append-only audit entries.
 - [x] Test approval separation, evidence binding, disabled/live configuration gates, per-account allowlisting, dry-run behavior, assumed-role identity verification, and the narrowly scoped AWS API call with mocked clients.
 - [ ] EC2 isolation, session revocation, and additional playbooks remain future work; no generic command execution is supported.
+
+### Phase 9 — Production readiness (local/CI complete; deployment gated)
+
+- [x] Add pull-request/main CI for backend lint/tests/migrations, frontend type/build, and Terraform format/validation without AWS credentials or `apply`.
+- [x] Run API and frontend containers as non-root users, use the frontend lockfile/standalone output, and support a one-off production migration job instead of concurrent startup migrations.
+- [x] Add dependency update automation and an operations guide covering deployment gates, backups, recovery, queue/DLQ operations, response safety, and cost review.
+- [ ] Production AWS deployment, cost estimate, live integration/restore exercises, load/soak tests against declared volume targets, and independent security assessment require an approved isolated environment and are not claimed complete.
 
 ## Repository layout
 
@@ -482,6 +489,9 @@ cd backend && python -m pytest
 No AWS credentials are needed for tests. The default test suite does not connect to a live AWS
 account.
 
+See [`docs/operations.md`](./docs/operations.md) for container operation, migration sequencing,
+production readiness gates, recovery guidance, and the pre-deployment cost/teardown process.
+
 ## AWS access, permissions, and cost approach
 
 No AWS resources are provisioned automatically. When AWS integrations are configured, collection
@@ -505,8 +515,9 @@ future deployment is represented as a quote or included in this repository yet.
 
 - Keep `.env` local; set a unique random JWT secret. Production secrets belong in a secret manager.
 - The first administrator is provisioned out-of-band; there is no public user registration.
-- This foundation has no application rate limiter, SSO/MFA, event retention policy, or production
-  deployment hardening yet. Do not expose it directly to the internet.
+- The application has no built-in rate limiter, SSO/MFA, or event retention job. Do not expose it
+  directly to the internet; see the production ingress and data-retention requirements in the
+  operations guide.
 - The API uses bearer tokens (no browser cookie session); production frontend hosting should use
   TLS and a reviewed token/session strategy.
 - Direct AWS event delivery/deployment has not been configured or verified in a real AWS account.
