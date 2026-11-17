@@ -23,6 +23,22 @@ def test_login_rejects_passwords_over_the_configured_input_limit(client) -> None
     assert response.status_code == 422
 
 
+def test_login_rate_limit_is_applied_and_429_keeps_cors_headers(client) -> None:
+    responses = [
+        client.post(
+            "/api/v1/auth/login",
+            headers={"Origin": "http://localhost:3000"},
+            json={"email": "admin@example.com", "password": ""},
+        )
+        for _ in range(11)
+    ]
+
+    assert all(response.status_code == 422 for response in responses[:10])
+    assert responses[10].status_code == 429
+    assert responses[10].headers["retry-after"].isdigit()
+    assert responses[10].headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
 def test_profile_requires_bearer_token(client) -> None:
     response = client.get("/api/v1/auth/me")
 

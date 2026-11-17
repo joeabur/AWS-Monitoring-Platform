@@ -19,6 +19,35 @@ Compose runs Alembic migrations during the single local API startup. The API and
 containers run as non-root users. The API image supports an opt-out migration switch for production
 deployments; do not allow every API replica to run schema migrations concurrently.
 
+Login requests are limited to 10 attempts per client IP per 60-second fixed window, per API process.
+The limiter uses the socket peer address and deliberately does not trust `X-Forwarded-For` directly.
+It is a best-effort local safeguard, not distributed brute-force protection.
+
+## Event retention
+
+The retention command uses a 90-day cutoff by default and only selects CloudTrail events older than
+the cutoff that are not referenced by any detection alert. Alert-linked event evidence is preserved
+so incident investigation and response workflows do not silently lose their references. This means
+the command does not bound the lifetime of alert-linked evidence; define and implement a separate
+alert/incident evidence retention policy before using it where legal or privacy policy requires a
+maximum lifetime.
+
+Run the command from the backend environment. It reports eligible and evidence-preserved counts
+without changing data unless `--apply` is passed:
+
+```bash
+cd backend
+python -m app.scripts.prune_events --older-than-days 90
+python -m app.scripts.prune_events --older-than-days 90 --apply
+```
+
+Review the dry-run output and backup/retention approvals before applying. Schedule the command
+through a single controlled maintenance job, not every API replica. Candidate events are scanned
+in batches within one database transaction and deletion rolls back on failure; alert evidence
+references are loaded from the detection-alert table to protect linked events. Retention is based on
+event time; delayed arrivals older than the cutoff may be eligible immediately if they have no alert
+evidence.
+
 ## Release and migration procedure
 
 The GitHub Actions workflow validates backend tests/lint, frontend type/build, and Terraform
@@ -46,11 +75,16 @@ forward fix, not by guessing at a downgrade.
 - Store `JWT_SECRET_KEY`, database credentials, notification secrets, and AWS role external IDs in a
   secret manager. Rotate them under an approved procedure; do not place secrets in image layers,
   logs, Terraform state, or source control.
-- The app does not provide SSO/MFA or an application rate limiter. Require enterprise identity
+- The app does not provide SSO/MFA or a distributed rate limiter. Require enterprise identity
   controls at the ingress and configure per-user/IP request limits there before public exposure.
+  The built-in 10-per-minute login limiter is in-process only and must not be treated as distributed
+  protection. Behind a proxy, configure Uvicorn `FORWARDED_ALLOW_IPS` to the exact trusted proxy
+  addresses/CIDRs; the proxy must strip client-supplied forwarding headers. Keep a shared ingress
+  limiter enabled regardless.
 - Use a private, encrypted PostgreSQL deployment with least-privilege database credentials,
   encrypted backups, tested restore procedures, and a defined retention/deletion policy. The
-  application currently has no automatic event-retention job; database growth is unbounded.
+  retention CLI prunes only unreferenced events older than 90 days by default; it does not prune
+  alerts, incidents, or evidence-linked events and must be scheduled explicitly.
 - Configure CloudTrail/EventBridge/SQS and the worker independently. Enable SQS partial batch
   failure reporting, keep queue visibility at least six times the worker timeout plus batching
   window, alarm on queue age/depth and both DLQs, and rehearse safe DLQ redrive.
@@ -101,4 +135,6 @@ database, worker, worker execution role, alarms, or cross-account event-bus forw
 Production use still requires a deployed/tested AWS environment, production Terraform root stack,
 application SSO/MFA or reviewed session architecture, ingress rate limiting, event retention,
 load/soak testing against stated volume targets, backup/restore drills, and an independent security
-assessment. The CI checks are not a penetration test or a cloud integration test.
+assessment. The local login limiter is not a substitute for shared ingress throttling, and the event
+retention command does not bound alert-linked evidence. The CI checks are not a penetration test or
+a cloud integration test.

@@ -15,6 +15,7 @@ from app.api.notifications import router as notifications_router
 from app.api.response import router as response_router
 from app.api.routes import router
 from app.core.config import get_settings
+from app.middleware.rate_limit import LoginRateLimitMiddleware
 
 
 @asynccontextmanager
@@ -29,6 +30,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.add_middleware(LoginRateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().allowed_origins,

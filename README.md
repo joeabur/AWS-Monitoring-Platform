@@ -154,6 +154,7 @@ versioned as code.
 - [x] Add dependency update automation and an operations guide covering deployment gates, backups, recovery, queue/DLQ operations, response safety, and cost review.
 - [x] Fail closed on production SQLite, PostgreSQL without TLS, invalid/non-HTTPS CORS origins, and bound login password input before password verification.
 - [x] Pin CI actions to immutable commits and use a fixed Ubuntu runner image to reduce workflow supply-chain and runner drift.
+- [x] Add bounded per-process login throttling and a dry-run-first 90-day cleanup command for old events that are not referenced as alert evidence.
 - [ ] Production AWS deployment, cost estimate, live integration/restore exercises, load/soak tests against declared volume targets, and independent security assessment require an approved isolated environment and are not claimed complete.
 
 ## Repository layout
@@ -517,9 +518,11 @@ future deployment is represented as a quote or included in this repository yet.
 
 - Keep `.env` local; set a unique random JWT secret. Production secrets belong in a secret manager.
 - The first administrator is provisioned out-of-band; there is no public user registration.
-- The application has no built-in rate limiter, SSO/MFA, or event retention job. Do not expose it
-  directly to the internet; see the production ingress and data-retention requirements in the
-  operations guide.
+- The application has no SSO/MFA or distributed rate limiter. A per-process login limiter is a
+  best-effort safeguard only. Event cleanup is an explicit CLI operation and preserves alert-linked
+  evidence, so it does not establish a maximum lifetime for all stored data. Do not expose the app
+  directly to the internet; see the production ingress and retention requirements in the operations
+  guide.
 - The API uses bearer tokens (no browser cookie session); production frontend hosting should use
   TLS and a reviewed token/session strategy.
 - Direct AWS event delivery/deployment has not been configured or verified in a real AWS account.

@@ -1,5 +1,6 @@
 import os
 from collections.abc import Generator
+from itertools import count
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-with-at-least-32-characters")
 
@@ -14,6 +15,8 @@ from app.database import get_db
 from app.main import app
 from app.models import User
 from app.models.user import Base
+
+_TEST_CLIENT_IDS = count(1)
 
 
 @pytest.fixture
@@ -61,7 +64,8 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        with TestClient(app) as test_client:
+        test_ip = f"2001:db8::{next(_TEST_CLIENT_IDS)}"
+        with TestClient(app, client=(test_ip, 12345)) as test_client:
             yield test_client
     finally:
         app.dependency_overrides.clear()
