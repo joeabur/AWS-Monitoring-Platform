@@ -272,6 +272,13 @@ docker-compose.yml       Local PostgreSQL + API + frontend
 .env.example             Local configuration template (no credentials)
 ```
 
+Additional developer documentation:
+
+- [Architecture](./docs/architecture.md)
+- [Operations and deployment readiness](./docs/operations.md)
+- [Contributing](./CONTRIBUTING.md)
+- [Changelog](./CHANGELOG.md)
+
 ## Getting started
 
 ### Hardware requirements

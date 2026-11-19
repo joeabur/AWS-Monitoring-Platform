@@ -19,6 +19,12 @@ Compose runs Alembic migrations during the single local API startup. The API and
 containers run as non-root users. The API image supports an opt-out migration switch for production
 deployments; do not allow every API replica to run schema migrations concurrently.
 
+Use `/api/v1/health/live` for process liveness and `/api/v1/health/ready` for database readiness.
+The existing `/api/v1/health` endpoint remains available as a backward-compatible combined check.
+API responses include `X-Request-ID`; supply an ID with `X-Request-ID` for traceable support
+requests or let the service generate and return a bounded UUID correlation ID.
+The API container uses liveness for its image health check; Compose uses database readiness.
+
 Login requests are limited to 10 attempts per client IP per 60-second fixed window, per API process.
 The limiter uses the socket peer address and deliberately does not trust `X-Forwarded-For` directly.
 It is a best-effort local safeguard, not distributed brute-force protection.

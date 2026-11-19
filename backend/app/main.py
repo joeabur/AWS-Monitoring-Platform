@@ -16,6 +16,8 @@ from app.api.response import router as response_router
 from app.api.routes import router
 from app.core.config import get_settings
 from app.middleware.rate_limit import LoginRateLimitMiddleware
+from app.middleware.request_id import RequestIdMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 
 @asynccontextmanager
@@ -31,12 +33,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(LoginRateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 app.include_router(router)
 app.include_router(accounts_router)

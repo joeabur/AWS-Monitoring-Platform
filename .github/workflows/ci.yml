@@ -27,6 +27,8 @@ jobs:
         working-directory: backend
       - run: python -m pytest
         working-directory: backend
+      - run: python -m pip install pip-audit && python -m pip_audit -r requirements.txt
+        working-directory: backend
       - run: DATABASE_URL=sqlite:////tmp/monitoring-ci.db alembic upgrade head
         working-directory: backend
 
@@ -44,6 +46,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm audit --audit-level=high
       - run: npm run build
 
   terraform:

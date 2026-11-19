@@ -26,6 +26,23 @@ def health(db: Database) -> dict[str, str]:
     return {"status": "healthy", "database": "healthy"}
 
 
+@router.get("/health/live")
+def liveness() -> dict[str, str]:
+    return {"status": "alive"}
+
+
+@router.get("/health/ready")
+def readiness(db: Database) -> dict[str, str]:
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "unready", "database": "unavailable"},
+        ) from exc
+    return {"status": "ready", "database": "healthy"}
+
+
 @router.post("/auth/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Database) -> TokenResponse:
     user = db.query(User).filter(User.email == payload.email.lower()).one_or_none()

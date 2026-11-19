@@ -1,8 +1,73 @@
+from sqlalchemy.exc import SQLAlchemyError
+
+
 def test_health_reports_database_status(client) -> None:
     response = client.get("/api/v1/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "healthy", "database": "healthy"}
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["cross-origin-opener-policy"] == "same-origin"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["permissions-policy"]
+    assert response.headers["x-request-id"]
+
+
+def test_liveness_and_readiness_endpoints(client) -> None:
+    liveness = client.get("/api/v1/health/live")
+    readiness = client.get("/api/v1/health/ready")
+
+    assert liveness.status_code == 200
+    assert liveness.json() == {"status": "alive"}
+    assert readiness.status_code == 200
+    assert readiness.json() == {"status": "ready", "database": "healthy"}
+
+
+def test_request_id_is_validated_and_propagated(client) -> None:
+    invalid = client.get("/api/v1/health/live", headers={"X-Request-ID": "bad id\n"})
+    valid = client.get("/api/v1/health/live", headers={"X-Request-ID": "trace-123"})
+
+    assert invalid.headers["x-request-id"] != "bad id\n"
+    assert valid.headers["x-request-id"] == "trace-123"
+
+
+def test_database_unavailable_health_endpoints_return_503(client, db_session, monkeypatch) -> None:
+    def unavailable_execute(*args, **kwargs) -> None:
+        del args, kwargs
+        raise SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(db_session, "execute", unavailable_execute)
+
+    combined = client.get("/api/v1/health")
+    readiness = client.get("/api/v1/health/ready")
+
+    assert combined.status_code == 503
+    assert combined.json() == {"detail": {"status": "unhealthy", "database": "unavailable"}}
+    assert readiness.status_code == 503
+    assert readiness.json() == {"detail": {"status": "unready", "database": "unavailable"}}
+
+
+def test_request_id_is_allowed_and_exposed_by_cors(client) -> None:
+    response = client.options(
+        "/api/v1/health/live",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-Request-ID",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "X-Request-ID" in response.headers["access-control-allow-headers"]
+
+    actual = client.get(
+        "/api/v1/health/live",
+        headers={"Origin": "http://localhost:3000", "X-Request-ID": "trace-123"},
+    )
+    assert actual.status_code == 200
+    assert "X-Request-ID" in actual.headers["access-control-expose-headers"]
 
 
 def test_login_rejects_unknown_user(client) -> None:

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_session_factory
@@ -60,7 +61,7 @@ def prune_expired_events(
             session.commit()
         else:
             session.rollback()
-    except Exception:
+    except SQLAlchemyError:
         session.rollback()
         raise
 
