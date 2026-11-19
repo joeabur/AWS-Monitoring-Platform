@@ -315,14 +315,11 @@ def call_tool(db: Session, name: str, arguments: dict[str, Any]) -> dict[str, An
         ):
             raise ValueError("Invalid alert severity")
         if status is not None and (
-            not isinstance(status, str)
-            or status not in {"open", "acknowledged", "suppressed"}
+            not isinstance(status, str) or status not in {"open", "acknowledged", "suppressed"}
         ):
             raise ValueError("Invalid alert status")
         if account_id is not None and (
-            not isinstance(account_id, str)
-            or len(account_id) != 12
-            or not account_id.isdigit()
+            not isinstance(account_id, str) or len(account_id) != 12 or not account_id.isdigit()
         ):
             raise ValueError("account_id must be a 12-digit AWS account ID")
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:

@@ -305,7 +305,9 @@ RULES: Final[tuple[DetectionRule, ...]] = (
             "config.amazonaws.com",
         ),
         ("eventTime", "eventSource", "eventName", "requestParameters"),
-        ("Confirm whether the monitoring change was approved and check for related configuration changes.",),
+        (
+            "Confirm whether the monitoring change was approved and check for related configuration changes.",
+        ),
         ("Restore the approved monitoring configuration through change control.",),
         "security_monitoring_disabled",
     ),

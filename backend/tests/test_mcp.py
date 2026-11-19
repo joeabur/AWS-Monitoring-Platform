@@ -87,9 +87,7 @@ def test_mcp_tools_report_guardrails(client, monkeypatch) -> None:
     assert '"items": []' in listed.json()["result"]["content"][0]["text"]
 
 
-def test_mcp_searches_alerts_and_returns_curated_evidence(
-    client, db_session, monkeypatch
-) -> None:
+def test_mcp_searches_alerts_and_returns_curated_evidence(client, db_session, monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.mcp.get_settings",
         lambda: Settings(mcp_enabled=True),

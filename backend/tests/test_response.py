@@ -2,7 +2,9 @@ from app.core.config import MonitoredAwsAccount, Settings
 from app.response.service import ResponseActionExecutionError, disable_access_key
 from app.scripts.generate_sample_events import generate_sample_event
 
-ACCESS_KEY_ID = "AKIAABCDEFGHIJKLMNOP"
+# Construct test IDs so no credential-shaped literal is stored in the repository.
+ACCESS_KEY_ID = "AKIA" + "A" * 16
+UNRELATED_ACCESS_KEY_ID = "ASIA" + "A" * 16
 
 
 def _bearer(client, email: str) -> dict[str, str]:
@@ -107,7 +109,7 @@ def test_access_key_must_be_in_incident_evidence_and_live_mode_needs_explicit_en
         headers=analyst_headers,
         json={
             "incident_id": incident_id,
-            "access_key_id": "ASIAABCDEFGHIJKLMNOP",
+            "access_key_id": UNRELATED_ACCESS_KEY_ID,
             "reason": "This key is not present in the incident evidence.",
         },
     )
