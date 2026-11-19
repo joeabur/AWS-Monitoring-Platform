@@ -322,8 +322,9 @@ No AWS account, AWS credentials, or paid AWS services are needed to run the loca
 The default Compose stack uses PostgreSQL locally and creates no cloud resources.
 
 To run services directly on your machine instead of using Docker, install Python 3.12+, Node.js 22+,
-and PostgreSQL 16+, then follow the dependency manifests in `backend/requirements-dev.txt` and
-`frontend/package-lock.json`. The commands below use the recommended Docker setup.
+then follow the source-install steps below. SQLite is the default for local development; PostgreSQL
+16+ is only required if you choose to run a local PostgreSQL database. Production requires
+PostgreSQL. The commands in the next section use the recommended Docker setup.
 
 ### Install and configure
 
@@ -391,6 +392,49 @@ database volume and its data, run `docker compose down --volumes`.
   port mappings in `docker-compose.yml`.
 - The default UI has no AWS events until you generate synthetic data or configure real AWS
   integrations. AWS account setup is optional; see [Configure AWS accounts](#configure-aws-accounts-phase-5).
+
+### Source install without Docker
+
+This optional path runs the API and frontend from source. It uses SQLite locally and does not create
+AWS resources. Open two terminals from the repository root.
+
+In the API terminal, copy the example settings to the backend directory, then set a unique
+`JWT_SECRET_KEY` and `DATABASE_URL=sqlite:///./monitoring.db` in `backend/.env`:
+
+```bash
+cp .env.example backend/.env
+cd backend
+python3 -m venv .venv
+```
+
+Activate the virtual environment (`source .venv/bin/activate` on macOS/Linux, or
+`.venv\Scripts\Activate.ps1` in PowerShell), then install dependencies, migrate the local database,
+and start the API:
+
+```bash
+python -m pip install -r requirements-dev.txt
+alembic upgrade head
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+In the frontend terminal, install the locked dependencies and start Next.js:
+
+```bash
+npm ci --prefix frontend
+npm run dev --prefix frontend
+```
+
+Open a third terminal, change to `backend/`, and activate its virtual environment. Create the first
+administrator and populate the local dashboard without AWS credentials:
+
+```bash
+python -m app.scripts.create_admin
+python -m app.scripts.generate_sample_events --count 8
+```
+
+Then use the same dashboard and API URLs listed above. The backend loads `.env` from its working
+directory, so keep the source-install settings in `backend/.env`; Compose instead reads the root
+`.env`. Response execution and MCP remain disabled by default.
 
 ### Configure AWS accounts (Phase 5)
 

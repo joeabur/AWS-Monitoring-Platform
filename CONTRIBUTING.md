@@ -9,12 +9,21 @@
 
 ## Setup
 
+Create and activate a Python virtual environment before installing backend development tools:
+
 ```bash
 cp .env.example .env
+python3 -m venv .venv
+# macOS/Linux:
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\Scripts\Activate.ps1
 python -m pip install -r backend/requirements-dev.txt
 npm ci --prefix frontend
 ```
 
+The root `.env` configures Docker Compose. When running the API directly from `backend/`, create
+`backend/.env` as described in the README's [source-install steps](./README.md#source-install-without-docker).
 Set a unique `JWT_SECRET_KEY` before starting the API. Never commit local secrets.
 
 ## Quality gates
