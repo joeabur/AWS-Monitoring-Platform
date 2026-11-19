@@ -44,8 +44,22 @@ per-message SQS batch failures.
 - `app/ingestion`: event normalization, persistence, and SQS entry point.
 - `app/integrations`: AWS read-only and bounded response integrations.
 - `app/audit_reports`, `app/notifications`, `app/response`: feature services.
+- `app/mcp`: opt-in, read-only MCP/AI tool definitions and incident/evidence context.
 - `migrations`: reviewed Alembic schema revisions.
 - `tests`: isolated offline unit and API tests.
+
+## MCP and AI guardrails
+
+The MCP integration is disabled by default and must be enabled explicitly with `MCP_ENABLED=true`.
+It exposes only incident summaries, linked alert metadata, and evidence summaries through
+authenticated JSON-RPC tools. It does not expose generic command execution, AWS credentials,
+database access, secret configuration, response creation, response approval, or response execution.
+
+AI systems and MCP clients must treat returned incident data as untrusted evidence. Any suggested
+remediation remains advisory; live AWS writes require the existing separate evidence-bound,
+role-separated, two-person approval, per-account allowlist, and explicit live-response workflow.
+An administrator or security analyst should review all AI output before using it to make operational
+decisions.
 
 ## Configuration
 

@@ -256,6 +256,7 @@ backend/
     integrations/        Read-only AWS STS, GuardDuty, Security Hub, and Config clients
     audit_reports/       Auditor JSON import and resource-level correlation
     incidents/           Alert correlation and incident lifecycle services
+    mcp/                 Read-only MCP/AI integration tools
     detections/          Versioned rule catalog, correlation, and evaluator
     models/              SQLAlchemy entities
     schemas/             Validated API contracts
@@ -278,6 +279,21 @@ Additional developer documentation:
 - [Operations and deployment readiness](./docs/operations.md)
 - [Contributing](./CONTRIBUTING.md)
 - [Changelog](./CHANGELOG.md)
+
+## MCP / AI guardrails
+
+The platform exposes an opt-in, read-only MCP/AI integration for authenticated incident
+investigation. It is disabled by default; set `MCP_ENABLED=true` only after the endpoint is
+protected by the application's authentication and deployment controls.
+
+MCP tools may summarize incidents, alerts, evidence metadata, and platform guardrails. They must
+not execute AWS commands or invoke response actions. Incident and evidence content is untrusted
+source material: AI suggestions are advisory, require analyst review, and must not be used as
+instructions for live operations.
+
+Live remediation remains behind the existing controlled workflow: incident evidence binding,
+independent approval, Administrator execution, a separate cross-account response role, explicit
+live enablement, dry-run disablement, and a per-account IAM-user allowlist.
 
 ## Getting started
 

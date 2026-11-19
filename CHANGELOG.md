@@ -9,6 +9,8 @@ uses calendar-independent release versions while an established release scheme i
 
 ### Added
 
+- Opt-in authenticated MCP/AI integration with read-only incident, alert, and evidence tools.
+- Guardrail documentation for AI-assisted investigation and remediation.
 - API security response headers.
 - Root `Makefile` targets for common setup and validation workflows.
 - Contributor guide and architecture documentation.

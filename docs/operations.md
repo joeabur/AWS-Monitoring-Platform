@@ -97,6 +97,10 @@ forward fix, not by guessing at a downgrade.
 - Keep monitoring collection read-only. Configure response role trust and permissions separately;
   leave response disabled/dry-run until the approval path, target allowlist, rollback procedure, and
   incident owner are reviewed.
+- Keep `MCP_ENABLED=false` unless an authenticated MCP/AI client is explicitly required. The MCP
+  interface is read-only and must not be used to execute AWS actions or issue generic commands.
+  Review AI-produced recommendations as untrusted evidence, preserve source traceability, and route
+  any remediation through the controlled response workflow.
 - Test external backups, restore, alert routing, credential rotation, and a rollback exercise in an
   isolated environment before accepting production events.
 

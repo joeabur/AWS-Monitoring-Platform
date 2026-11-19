@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     smtp_password: SecretStr | None = None
     notification_email_from: str | None = None
     notification_email_to: str = ""
+    mcp_enabled: bool = False
 
     @field_validator("notification_min_severity")
     @classmethod
