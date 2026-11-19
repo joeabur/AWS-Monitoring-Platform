@@ -88,7 +88,7 @@ def test_detection_inventory_and_test_endpoint_do_not_persist(client, db_session
     )
 
     assert inventory.status_code == 200
-    assert len(inventory.json()) == 16
+    assert len(inventory.json()) == 19
     assert tested.status_code == 200
     assert tested.json()["synthetic_test"] is True
     assert tested.json()["results"][0]["matched"] is True

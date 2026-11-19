@@ -1,5 +1,6 @@
 import ipaddress
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -234,6 +235,29 @@ def _exposes_admin_port(event: CloudTrailEvent) -> bool:
         ):
             return True
     return False
+
+
+def _contains_public_grant(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        if str(value.get("group", "")).lower() == "all":
+            return True
+        return any(_contains_public_grant(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_public_grant(child) for child in value)
+    return False
+
+
+def _makes_ebs_snapshot_public(event: CloudTrailEvent) -> bool:
+    if (
+        event.event_source != "ec2.amazonaws.com"
+        or event.event_name != "ModifySnapshotAttribute"
+        or event.error_code is not None
+    ):
+        return False
+    permission = _request(event).get("createVolumePermission", {})
+    if not isinstance(permission, Mapping):
+        return False
+    return _contains_public_grant(permission.get("add", {}))
 
 
 def _in_trusted_network(source_ip: str | None, configured: set[str]) -> bool:
@@ -474,6 +498,33 @@ def _matches(
             -rule.threshold :
         ]
         return matched, len(deduplicated), tuple(item.cloudtrail_event_id for item in chosen)
+    if rule.condition == "security_monitoring_disabled":
+        if event.error_code is not None:
+            return False, 1, (event.cloudtrail_event_id,)
+        if event.event_source == "guardduty.amazonaws.com":
+            disabled = event.event_name == "DeleteDetector" or (
+                event.event_name == "UpdateDetector" and request.get("enable") is False
+            )
+        elif event.event_source == "securityhub.amazonaws.com":
+            disabled = event.event_name == "DisableSecurityHub"
+        elif event.event_source == "config.amazonaws.com":
+            disabled = event.event_name in {
+                "StopConfigurationRecorder",
+                "DeleteConfigurationRecorder",
+            }
+        else:
+            disabled = False
+        return disabled, 1, (event.cloudtrail_event_id,)
+    if rule.condition == "iam_mfa_device_removed":
+        return (
+            event.event_source == "iam.amazonaws.com"
+            and event.event_name in {"DeactivateMFADevice", "DeleteVirtualMFADevice"}
+            and event.error_code is None,
+            1,
+            (event.cloudtrail_event_id,),
+        )
+    if rule.condition == "public_ebs_snapshot":
+        return _makes_ebs_snapshot_public(event), 1, (event.cloudtrail_event_id,)
     return False, 0, ()
 
 

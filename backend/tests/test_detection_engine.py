@@ -70,9 +70,9 @@ def match_rule(rule_id: str, current: CloudTrailEvent, context=None, config=None
     return results[0] if results else None
 
 
-def test_detection_inventory_has_sixteen_versioned_rules() -> None:
-    assert len(RULES) == 16
-    assert len({rule.rule_id for rule in RULES}) == 16
+def test_detection_inventory_has_nineteen_versioned_rules() -> None:
+    assert len(RULES) == 19
+    assert len({rule.rule_id for rule in RULES}) == 19
     assert all(rule.version >= 1 and 0 <= rule.risk_score <= 100 for rule in RULES)
 
 
@@ -346,3 +346,75 @@ def test_invalid_trusted_network_configuration_is_rejected() -> None:
             jwt_secret_key=SecretStr("test-secret-key-with-at-least-32-characters"),
             trusted_ip_cidrs="not-a-network",
         )
+
+
+def test_security_monitoring_disable_rule_requires_successful_disable() -> None:
+    guardduty_disabled = event(
+        "guardduty-disabled",
+        "guardduty.amazonaws.com",
+        "UpdateDetector",
+        request={"enable": False},
+    )
+    guardduty_enabled = event(
+        "guardduty-enabled",
+        "guardduty.amazonaws.com",
+        "UpdateDetector",
+        request={"enable": True},
+    )
+    failed_disable = event(
+        "guardduty-failed-disable",
+        "guardduty.amazonaws.com",
+        "DeleteDetector",
+    )
+    failed_disable.error_code = "AccessDenied"
+    config_stopped = event(
+        "config-stopped",
+        "config.amazonaws.com",
+        "StopConfigurationRecorder",
+    )
+
+    assert match_rule("AWS-CT-017", guardduty_disabled) is not None
+    assert match_rule("AWS-CT-017", guardduty_enabled) is None
+    assert match_rule("AWS-CT-017", failed_disable) is None
+    assert match_rule("AWS-CT-017", config_stopped) is not None
+
+
+def test_mfa_removal_and_public_ebs_snapshot_rules() -> None:
+    mfa_removed = event(
+        "mfa-removed",
+        "iam.amazonaws.com",
+        "DeactivateMFADevice",
+    )
+    failed_mfa_removal = event(
+        "mfa-removal-failed",
+        "iam.amazonaws.com",
+        "DeactivateMFADevice",
+    )
+    failed_mfa_removal.error_code = "AccessDenied"
+    public_snapshot = event(
+        "snapshot-public",
+        "ec2.amazonaws.com",
+        "ModifySnapshotAttribute",
+        request={
+            "createVolumePermission": {
+                "add": {"items": [{"group": "all"}]},
+                "remove": {"items": []},
+            }
+        },
+    )
+    private_snapshot = event(
+        "snapshot-private",
+        "ec2.amazonaws.com",
+        "ModifySnapshotAttribute",
+        request={
+            "createVolumePermission": {
+                "add": {"items": [{"userId": "111122223333"}]},
+                "remove": {"items": [{"group": "all"}]},
+            }
+        },
+    )
+
+    assert match_rule("AWS-CT-018", mfa_removed) is not None
+    assert match_rule("AWS-CT-018", failed_mfa_removal) is None
+    assert match_rule("AWS-CT-019", public_snapshot) is not None
+    assert match_rule("AWS-CT-019", private_snapshot) is None

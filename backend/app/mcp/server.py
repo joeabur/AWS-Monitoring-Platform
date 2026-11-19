@@ -50,11 +50,63 @@ def tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "search_alerts",
+            "description": "Search persisted detection alerts by severity, status, or AWS account.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": ["critical", "high", "medium", "low", "informational"],
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["open", "acknowledged", "suppressed"],
+                    },
+                    "account_id": {"type": "string", "pattern": "^\\d{12}$"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "get_alert_evidence",
+            "description": "Get one alert with a curated summary of its linked CloudTrail evidence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"alert_id": {"type": "string", "format": "uuid"}},
+                "required": ["alert_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "get_guardrails",
             "description": "Get the platform guardrails for MCP and AI-assisted investigation.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     ]
+
+
+def _alert_summary(alert: DetectionAlert) -> dict[str, Any]:
+    return {
+        "id": str(alert.id),
+        "rule_id": alert.rule_id,
+        "title": alert.title,
+        "severity": alert.severity,
+        "risk_score": alert.risk_score,
+        "score_basis": alert.score_basis,
+        "status": alert.status,
+        "account_id": alert.account_id,
+        "region": alert.region,
+        "principal_id": alert.principal_id,
+        "source_ip": alert.source_ip,
+        "resource_arns": alert.resource_arns,
+        "event_refs": alert.event_refs,
+        "observed_count": alert.observed_count,
+        "first_observed_at": alert.first_observed_at.isoformat(),
+        "last_observed_at": alert.last_observed_at.isoformat(),
+        "investigation_steps": alert.investigation_steps,
+    }
 
 
 def list_incidents(db: Session, status: str | None = None, limit: int = 25) -> dict[str, Any]:
@@ -86,6 +138,72 @@ def list_incidents(db: Session, status: str | None = None, limit: int = 25) -> d
             }
             for incident in incidents
         ],
+    }
+
+
+def search_alerts(
+    db: Session,
+    *,
+    severity: str | None = None,
+    status: str | None = None,
+    account_id: str | None = None,
+    limit: int = 25,
+) -> dict[str, Any]:
+    filters = []
+    if severity is not None:
+        filters.append(DetectionAlert.severity == severity)
+    if status is not None:
+        filters.append(DetectionAlert.status == status)
+    if account_id is not None:
+        filters.append(DetectionAlert.account_id == account_id)
+    total = db.scalar(select(func.count()).select_from(DetectionAlert).where(*filters)) or 0
+    alerts = db.scalars(
+        select(DetectionAlert)
+        .where(*filters)
+        .order_by(DetectionAlert.last_observed_at.desc(), DetectionAlert.id)
+        .limit(limit)
+    ).all()
+    return {"total": total, "items": [_alert_summary(alert) for alert in alerts]}
+
+
+def get_alert_evidence(db: Session, alert_id: str) -> dict[str, Any] | None:
+    try:
+        parsed_id = UUID(alert_id)
+    except ValueError:
+        return None
+    alert = db.get(DetectionAlert, parsed_id)
+    if alert is None:
+        return None
+    event_ids = {UUID(ref) for ref in alert.event_refs}
+    events = (
+        db.scalars(
+            select(CloudTrailEvent)
+            .where(CloudTrailEvent.id.in_(event_ids))
+            .order_by(CloudTrailEvent.event_time.desc())
+        ).all()
+        if event_ids
+        else []
+    )
+    return {
+        "alert": _alert_summary(alert),
+        "evidence": [
+            {
+                "id": str(event.id),
+                "cloudtrail_event_id": event.cloudtrail_event_id,
+                "event_time": event.event_time.isoformat(),
+                "event_source": event.event_source,
+                "event_name": event.event_name,
+                "account_id": event.account_id,
+                "region": event.region,
+                "principal_id": event.principal_id,
+                "principal_arn": event.principal_arn,
+                "source_ip": event.source_ip,
+                "error_code": event.error_code,
+                "resource_arns": event.resource_arns,
+            }
+            for event in events
+        ],
+        "guardrails": GUARDRAILS,
     }
 
 
@@ -168,19 +286,64 @@ def call_tool(db: Session, name: str, arguments: dict[str, Any]) -> dict[str, An
     if name == "list_incidents":
         status = arguments.get("status")
         limit = arguments.get("limit", 25)
-        if status not in {
-            None,
-            "new",
-            "acknowledged",
-            "investigating",
-            "contained",
-            "resolved",
-            "false_positive",
-        }:
+        if status is not None and (
+            not isinstance(status, str)
+            or status
+            not in {
+                "new",
+                "acknowledged",
+                "investigating",
+                "contained",
+                "resolved",
+                "false_positive",
+            }
+        ):
             raise ValueError("Invalid incident status")
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
             raise ValueError("Limit must be between 1 and 100")
         return list_incidents(db, status=status, limit=limit)
+    if name == "search_alerts":
+        if set(arguments) - {"severity", "status", "account_id", "limit"}:
+            raise ValueError("Unsupported search_alerts argument")
+        severity = arguments.get("severity")
+        status = arguments.get("status")
+        account_id = arguments.get("account_id")
+        limit = arguments.get("limit", 25)
+        if severity is not None and (
+            not isinstance(severity, str)
+            or severity not in {"critical", "high", "medium", "low", "informational"}
+        ):
+            raise ValueError("Invalid alert severity")
+        if status is not None and (
+            not isinstance(status, str)
+            or status not in {"open", "acknowledged", "suppressed"}
+        ):
+            raise ValueError("Invalid alert status")
+        if account_id is not None and (
+            not isinstance(account_id, str)
+            or len(account_id) != 12
+            or not account_id.isdigit()
+        ):
+            raise ValueError("account_id must be a 12-digit AWS account ID")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("Limit must be between 1 and 100")
+        return search_alerts(
+            db,
+            severity=severity,
+            status=status,
+            account_id=account_id,
+            limit=limit,
+        )
+    if name == "get_alert_evidence":
+        if set(arguments) != {"alert_id"}:
+            raise ValueError("get_alert_evidence requires only alert_id")
+        alert_id = arguments.get("alert_id")
+        if not isinstance(alert_id, str):
+            raise ValueError("alert_id must be a string")
+        alert = get_alert_evidence(db, alert_id)
+        if alert is None:
+            raise LookupError("Alert not found")
+        return alert
     if name == "get_incident":
         incident_id = arguments.get("incident_id")
         if not isinstance(incident_id, str):

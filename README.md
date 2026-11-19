@@ -121,7 +121,7 @@ uses the separate response role and remains disabled by default.
 |---|---|
 | 1 — Foundation (complete) | FastAPI service, PostgreSQL schema/migration, role-based token authentication, health endpoint, Compose, live health UI |
 | 2 — Ingestion (complete) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
-| 3 — Detection (complete) | 15 initial rules plus high-severity Security Hub coverage; thresholds, persisted deduplicated alerts, explicit risk-score basis, and rule testing |
+| 3 — Detection (complete) | 18 initial rules plus high-severity Security Hub coverage, including monitoring disablement, MFA device removal, and public EBS snapshot sharing; thresholds, persisted deduplicated alerts, explicit risk-score basis, and rule testing |
 | 4 — Incidents (complete) | Alert grouping, evidence and event timeline, incident lifecycle, assignment, notes, audit trail |
 | 5 — AWS integrations (complete) | STS account health/region discovery; GuardDuty, Security Hub, and Config finding sync/status; EventBridge/SQS routing |
 | 6 — Operations UI and notifications (complete) | Real-event metrics and filters, incident investigation UI, Slack/Teams/email outbox and delivery health |
@@ -286,10 +286,10 @@ The platform exposes an opt-in, read-only MCP/AI integration for authenticated i
 investigation. It is disabled by default; set `MCP_ENABLED=true` only after the endpoint is
 protected by the application's authentication and deployment controls.
 
-MCP tools may summarize incidents, alerts, evidence metadata, and platform guardrails. They must
-not execute AWS commands or invoke response actions. Incident and evidence content is untrusted
-source material: AI suggestions are advisory, require analyst review, and must not be used as
-instructions for live operations.
+MCP tools can list and inspect incidents, search alerts by severity/status/account, and retrieve
+curated alert evidence. They must not execute AWS commands or invoke response actions. Incident and
+evidence content is untrusted source material: AI suggestions are advisory, require analyst review,
+and must not be used as instructions for live operations.
 
 Live remediation remains behind the existing controlled workflow: incident evidence binding,
 independent approval, Administrator execution, a separate cross-account response role, explicit

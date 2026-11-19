@@ -10,6 +10,9 @@ uses calendar-independent release versions while an established release scheme i
 ### Added
 
 - Opt-in authenticated MCP/AI integration with read-only incident, alert, and evidence tools.
+- MCP alert search and curated alert evidence queries.
+- Detection rules for disabling AWS security monitoring, removing IAM MFA devices, and public EBS
+  snapshot sharing.
 - Guardrail documentation for AI-assisted investigation and remediation.
 - API security response headers.
 - Root `Makefile` targets for common setup and validation workflows.
