@@ -9,7 +9,7 @@ from app.scripts.generate_sample_events import generate_sample_event
 
 
 def test_sqs_worker_persists_valid_event_and_returns_poison_message_for_retry(
-    db_session, monkeypatch
+    db_session, monkeypatch, capsys
 ) -> None:
     class SessionFactory:
         def __call__(self):
@@ -29,6 +29,9 @@ def test_sqs_worker_persists_valid_event_and_returns_poison_message_for_retry(
     result = lambda_handler({"Records": [valid_message, invalid_message]}, None)
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "invalid-1"}]}
+    metric = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert metric["WorkerMessagesProcessed"] == 1
+    assert metric["WorkerMessagesFailed"] == 1
 
 
 def test_sqs_worker_refuses_ephemeral_sqlite_storage() -> None:

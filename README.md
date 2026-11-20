@@ -29,11 +29,16 @@ FastAPI serves the analyst UI and APIs, not the AWS event polling loop. AWS acce
 standard boto3 credential chain locally and STS-assumed, read-only roles for monitored accounts.
 Response actions are opt-in and use a separate narrowly-scoped role.
 
+See the [verified capability assessment and prioritized modernization roadmap](docs/platform-assessment.md)
+for the service coverage matrix, competitive comparison, security/reliability gaps, and proposed next
+steps. The current product is security-event monitoring; customer infrastructure metrics, APM, and
+cost monitoring are not yet implemented.
+
 ## Architecture and workflow diagram
 
 The diagram shows both the implemented application paths and the AWS deployment components that
-remain opt-in. AWS resources are **not deployed by this repository**; the EventBridge/SQS Terraform
-module is available for a reviewed deployment, and its worker/database wiring is an operator task.
+remain opt-in. AWS resources are **not deployed by this repository**; the production Terraform
+environment and EventBridge/SQS module require a reviewed deployment and source-account setup.
 
 ```mermaid
 flowchart LR
@@ -70,7 +75,7 @@ flowchart LR
         UI["Next.js SOC dashboard"]
         AUDIT_TOOL["AWS Security Auditing Tool<br/>independent point-in-time reports"]
         IMPORT["Authenticated schema-v1<br/>report import and exact matching"]
-        RETENTION["Event retention CLI<br/>90-day default; dry-run first;<br/>keeps alert-linked evidence"]
+        RETENTION["Event retention CLI<br/>90-day default; dry-run first;<br/>removes expired evidence refs"]
     end
 
     USERS["Analysts / administrators / viewers"]
@@ -123,7 +128,7 @@ uses the separate response role and remains disabled by default.
 | 2 — Ingestion (complete) | CloudTrail normalization, durable event persistence/API, idempotency, SQS partial-batch worker, synthetic generator, opt-in EventBridge/SQS Terraform module |
 | 3 — Detection (complete) | 18 initial rules plus high-severity Security Hub coverage, including monitoring disablement, MFA device removal, and public EBS snapshot sharing; thresholds, persisted deduplicated alerts, explicit risk-score basis, and rule testing |
 | 4 — Incidents (complete) | Alert grouping, evidence and event timeline, incident lifecycle, assignment, notes, audit trail |
-| 5 — AWS integrations (complete) | STS account health/region discovery; GuardDuty, Security Hub, and Config finding sync/status; EventBridge/SQS routing |
+| 5 — AWS integrations (implemented, deployment gated) | STS account health/region discovery; bounded GuardDuty, Security Hub, and Config sync APIs; EventBridge/SQS routing; no customer workload metrics or inventory |
 | 6 — Operations UI and notifications (complete) | Real-event metrics and filters, incident investigation UI, Slack/Teams/email outbox and delivery health |
 | 7 — Auditor integration (complete) | Schema-v1 JSON report import, audit history, and resource correlation with incidents/dashboard |
 | 8 — Controlled response (complete, limited) | Detection-only by default; independently approved dry-run/live IAM access-key disable playbook with separate role and audit trail |
@@ -131,8 +136,8 @@ uses the separate response role and remains disabled by default.
 
 ### MVP boundary
 
-The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with bounded
-GuardDuty, Security Hub, and Config collection. Notifications and auditor-report correlation build
+The MVP is CloudTrail event ingestion, normalization, detection and incident evidence, with bounded,
+manual GuardDuty, Security Hub, and Config collection. Notifications and auditor-report correlation build
 on the stable ingestion and incident contracts; response automation remains deferred. Phases 1–3
 deliberately contain no direct AWS polling, live AWS connection, or mock dashboard counts. The
 initial UI reports actual API/database health and the synthetic generator creates clearly marked
@@ -191,7 +196,7 @@ versioned as code.
 - [x] Require Administrator or Security Analyst authorization for incident mutations; viewers retain
   read-only access. Every analyst mutation is recorded in the incident audit trail.
 
-### Phase 5 — AWS integrations (complete)
+### Phase 5 — AWS integration code (implemented; deployment and scheduled collection gated)
 
 - [x] Configure multiple monitored accounts without storing AWS credentials; role assumption uses
   temporary STS credentials, optional external IDs, and the local AWS credential chain.
@@ -731,7 +736,8 @@ requires narrowly scoped EventBridge target permissions and SQS queue resource p
 permissions are combined with monitoring permissions.
 
 **Cost:** Local development and tests cost **$0 in AWS** (containers run locally); local
-compute/storage are outside AWS billing. The Terraform module is opt-in and not deployed. Future
+compute/storage are outside AWS billing. The production environment and event-pipeline module are
+opt-in and not deployed. Future
 costs depend on account/region count, CloudTrail
 data-event volume, GuardDuty/Security Hub/Config enablement and billing plans, EventBridge/SQS
 throughput, retention, and database sizing. Those metered services can incur charges even when the
@@ -743,16 +749,17 @@ future deployment is represented as a quote or included in this repository yet.
 
 - Keep `.env` local; set a unique random JWT secret. Production secrets belong in a secret manager.
 - The first administrator is provisioned out-of-band; there is no public user registration.
-- The application has no SSO/MFA or distributed rate limiter. A per-process login limiter is a
-  best-effort safeguard only. Event cleanup is an explicit CLI operation and preserves alert-linked
-  evidence, so it does not establish a maximum lifetime for all stored data. Do not expose the app
+- Production can use Cognito OIDC with required MFA; local authentication remains available for
+  development. The login limiter is per-process and is not distributed protection. Event cleanup
+  removes expired raw evidence and references; production schedules daily audit export to S3 Object
+  Lock. Do not expose the app
   directly to the internet; see the production ingress and retention requirements in the operations
   guide.
 - The API uses bearer tokens (no browser cookie session); production frontend hosting should use
   TLS and a reviewed token/session strategy.
 - Direct AWS event delivery/deployment has not been configured or verified in a real AWS account.
-  The Terraform module defines rules for CloudTrail, GuardDuty, Security Hub, and Config; it is not
-  a deployed AWS integration.
+  The Terraform environment and module define resources for CloudTrail, GuardDuty, Security Hub, and
+  Config; they are not a deployed AWS integration.
 - Integration health reflects the most recent AWS health check or manual service sync; finding
   status reflects the newest provider update observed. Neither proves source services are
   comprehensively configured or that no events were missed.

@@ -66,15 +66,16 @@ def test_retention_preview_is_non_destructive_and_preserves_alert_evidence(db_se
         "dry_run": True,
         "older_than_days": 90,
         "scanned": 2,
-        "eligible_for_deletion": 1,
-        "preserved_as_alert_evidence": 1,
+        "eligible_for_deletion": 2,
+        "expired_alert_references": 1,
+        "alerts_updated": 1,
     }
     assert db_session.scalar(select(CloudTrailEvent).where(CloudTrailEvent.id == linked_event.id))
     assert db_session.scalar(select(CloudTrailEvent).where(CloudTrailEvent.id == unlinked_event.id))
     assert db_session.scalar(select(CloudTrailEvent).where(CloudTrailEvent.id == recent_event.id))
 
 
-def test_retention_apply_removes_only_unreferenced_expired_events(db_session) -> None:
+def test_retention_apply_removes_expired_events_and_alert_evidence_references(db_session) -> None:
     linked_event = _event(old=True)
     unlinked_event = _event(old=True)
     db_session.add_all([linked_event, unlinked_event])
@@ -107,10 +108,17 @@ def test_retention_apply_removes_only_unreferenced_expired_events(db_session) ->
     result = prune_expired_events(db_session, older_than_days=90, apply=True, batch_size=1)
 
     assert result["dry_run"] is False
-    assert result["eligible_for_deletion"] == 1
-    assert result["preserved_as_alert_evidence"] == 1
-    assert db_session.scalar(select(CloudTrailEvent).where(CloudTrailEvent.id == linked_event.id))
+    assert result["eligible_for_deletion"] == 2
+    assert result["expired_alert_references"] == 1
+    assert result["alerts_updated"] == 1
+    assert (
+        db_session.scalar(select(CloudTrailEvent).where(CloudTrailEvent.id == linked_event.id))
+        is None
+    )
     assert (
         db_session.scalar(select(CloudTrailEvent).where(CloudTrailEvent.id == unlinked_event.id))
         is None
     )
+    alert = db_session.scalar(select(DetectionAlert))
+    assert alert is not None
+    assert alert.event_refs == []

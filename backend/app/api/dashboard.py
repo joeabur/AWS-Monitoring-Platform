@@ -207,13 +207,23 @@ def dashboard_summary(
     )
     configured_accounts = get_settings().monitored_aws_accounts
     monitored_account_ids = {account.account_id for account in configured_accounts}
+    scoped_account_ids = (
+        monitored_account_ids.intersection({account_id})
+        if account_id is not None
+        else monitored_account_ids
+    )
+    integration_filters = []
+    if scoped_account_ids:
+        integration_filters.append(AwsIntegrationHealth.account_id.in_(scoped_account_ids))
+    if region is not None:
+        integration_filters.append(AwsIntegrationHealth.region.in_((region.lower(), "")))
     integrations = (
         db.scalars(
             select(AwsIntegrationHealth)
-            .where(AwsIntegrationHealth.account_id.in_(monitored_account_ids))
+            .where(*integration_filters)
             .order_by(AwsIntegrationHealth.integration, AwsIntegrationHealth.region)
         ).all()
-        if monitored_account_ids
+        if scoped_account_ids
         else []
     )
     report_filters = []
@@ -279,17 +289,25 @@ def dashboard_summary(
         connection_status = "not_configured"
     elif not integrations:
         connection_status = "unknown"
-    elif any(integration.status == "unhealthy" for integration in integrations):
+    elif any(
+        integration.integration == "sts" and integration.status == "unhealthy"
+        for integration in integrations
+    ):
         connection_status = "unhealthy"
     elif all(
         any(
             integration.account_id == account_id
             and integration.integration == "sts"
             and integration.status == "healthy"
-            and integration.last_checked_at.replace(tzinfo=UTC) >= now - timedelta(hours=24)
+            and (
+                integration.last_checked_at.replace(tzinfo=UTC)
+                if integration.last_checked_at.tzinfo is None
+                else integration.last_checked_at.astimezone(UTC)
+            )
+            >= now - timedelta(hours=24)
             for integration in integrations
         )
-        for account_id in monitored_account_ids
+        for account_id in scoped_account_ids
     ):
         connection_status = "healthy"
     else:

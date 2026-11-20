@@ -1,4 +1,8 @@
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 from app.core.config import MonitoredAwsAccount, Settings
+from app.models import AwsIntegrationHealth
 from app.scripts.generate_sample_events import generate_sample_event
 
 
@@ -65,3 +69,77 @@ def test_dashboard_requires_auth_and_rejects_timezone_naive_range(client) -> Non
         headers=_bearer(client),
     )
     assert response.status_code == 422
+
+
+def test_dashboard_scopes_integration_health_to_selected_account_and_region(
+    client, db_session, monkeypatch
+) -> None:
+    headers = _bearer(client)
+    accounts = [
+        MonitoredAwsAccount(account_id="111122223333", name="production"),
+        MonitoredAwsAccount(account_id="444455556666", name="staging"),
+    ]
+    monkeypatch.setattr(
+        "app.api.dashboard.get_settings",
+        lambda: Settings(monitored_aws_accounts=accounts),
+    )
+    checked_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add_all(
+        [
+            AwsIntegrationHealth(
+                id=uuid4(),
+                account_id="111122223333",
+                integration="sts",
+                region="",
+                status="unhealthy",
+                resource_count=0,
+                last_checked_at=checked_at,
+                last_success_at=None,
+            ),
+            AwsIntegrationHealth(
+                id=uuid4(),
+                account_id="444455556666",
+                integration="sts",
+                region="",
+                status="healthy",
+                resource_count=3,
+                last_checked_at=checked_at,
+                last_success_at=checked_at,
+            ),
+            AwsIntegrationHealth(
+                id=uuid4(),
+                account_id="444455556666",
+                integration="guardduty",
+                region="us-west-2",
+                status="unhealthy",
+                last_error_code="AccessDenied",
+                resource_count=0,
+                last_checked_at=checked_at,
+                last_success_at=None,
+            ),
+            AwsIntegrationHealth(
+                id=uuid4(),
+                account_id="444455556666",
+                integration="securityhub",
+                region="us-east-1",
+                status="healthy",
+                resource_count=2,
+                last_checked_at=checked_at,
+                last_success_at=checked_at,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/dashboard/summary?account_id=444455556666&region=us-west-2",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["aws_connection_status"] == "healthy"
+    assert [(item["integration"], item["region"]) for item in body["integrations"]] == [
+        ("guardduty", "us-west-2"),
+        ("sts", ""),
+    ]

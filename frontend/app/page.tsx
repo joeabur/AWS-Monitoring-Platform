@@ -1,6 +1,13 @@
 "use client";
 
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  beginCognitoSignIn,
+  completeCognitoSignIn,
+  currentCognitoAccessToken,
+  signOutCognito,
+} from "./cognito-auth";
+import { getRuntimeConfig } from "./runtime-config";
 
 type Account = {
   account_id: string;
@@ -114,7 +121,6 @@ type Dashboard = {
   aws_connection_status: string;
 };
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const severityOrder = ["critical", "high", "medium", "low", "informational"];
 const allowedIncidentTransitions: Record<string, string[]> = {
   new: ["acknowledged", "investigating", "contained", "resolved", "false_positive"],
@@ -126,10 +132,14 @@ const allowedIncidentTransitions: Record<string, string[]> = {
 };
 
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const config = getRuntimeConfig();
+  const accessToken = config.authMode === "cognito"
+    ? await currentCognitoAccessToken()
+    : token;
+  const response = await fetch(`${config.apiBaseUrl}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${accessToken}`,
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
@@ -155,6 +165,7 @@ function SeverityPill({ severity }: { severity: string }) {
 
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<"local" | "cognito" | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -174,6 +185,8 @@ export default function Home() {
   const [noteDraft, setNoteDraft] = useState("");
   const activeIncidentId = useRef<string | null>(null);
   const incidentRequest = useRef<AbortController | null>(null);
+  const callbackHandled = useRef(false);
+  const cognitoAuthEnabled = authMode === "cognito";
   const canInvestigate = userRole === "administrator" || userRole === "security_analyst";
   const query = useMemo(() => {
     const end = new Date();
@@ -184,6 +197,36 @@ export default function Home() {
     if (severity) params.set("severity", severity);
     return params.toString();
   }, [windowHours, accountId, region, severity]);
+
+  useEffect(() => {
+    setAuthMode(getRuntimeConfig().authMode);
+  }, []);
+
+  useEffect(() => {
+    if (authMode !== "cognito" || callbackHandled.current) return;
+    const callback = new URLSearchParams(window.location.search);
+    if (!callback.has("code") && !callback.has("error")) return;
+
+    callbackHandled.current = true;
+    let active = true;
+    setBusy(true);
+    completeCognitoSignIn()
+      .then((user) => {
+        if (active) setToken(user.access_token);
+      })
+      .catch((cause: unknown) => {
+        if (active) {
+          setError(cause instanceof Error ? cause.message : "Cognito sign-in failed.");
+        }
+      })
+      .finally(() => {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        if (active) setBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [authMode]);
 
   useEffect(() => {
     if (!token) return;
@@ -297,7 +340,7 @@ export default function Home() {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/auth/login`, {
+      const response = await fetch(`${getRuntimeConfig().apiBaseUrl}/api/v1/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -314,38 +357,85 @@ export default function Home() {
     }
   }
 
+  async function beginSignIn() {
+    setBusy(true);
+    setError(null);
+    try {
+      await beginCognitoSignIn();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Cognito sign-in is unavailable.");
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    incidentRequest.current?.abort();
+    activeIncidentId.current = null;
+    setToken(null);
+    setDashboard(null);
+    setUserRole(null);
+    setIncidentDetail(null);
+    setSelectedIncidentId(null);
+    if (cognitoAuthEnabled) {
+      try {
+        await signOutCognito();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Cognito sign-out failed.");
+      }
+    }
+  }
+
+  if (authMode === null) {
+    return (
+      <main className="login-shell">
+        <section className="login-card" aria-live="polite">Loading sign-in configuration…</section>
+      </main>
+    );
+  }
+
   if (!token) {
     return (
       <main className="login-shell">
-        <form className="login-card" onSubmit={signIn}>
+        <section className="login-card">
           <div className="brand login-brand"><span className="brand-mark">A</span> AWS Monitor</div>
           <p className="eyebrow">SECURITY OPERATIONS</p>
           <h1>Sign in to your workspace</h1>
-          <p className="login-copy">Use your platform analyst or administrator account.</p>
-          <label htmlFor="email">Email</label>
-          <input
-            autoComplete="username"
-            id="email"
-            onChange={(event) => setEmail(event.target.value)}
-            required
-            type="email"
-            value={email}
-          />
-          <label htmlFor="password">Password</label>
-          <input
-            autoComplete="current-password"
-            id="password"
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
+          {cognitoAuthEnabled ? (
+            <>
+              <p className="login-copy">Continue with your organization identity provider.</p>
+              <button className="primary-button" disabled={busy} onClick={() => void beginSignIn()} type="button">
+                {busy ? "Redirecting…" : "Continue with sign-in"}
+              </button>
+            </>
+          ) : (
+            <form onSubmit={signIn}>
+              <p className="login-copy">Use your platform analyst or administrator account.</p>
+              <label htmlFor="email">Email</label>
+              <input
+                autoComplete="username"
+                id="email"
+                onChange={(event) => setEmail(event.target.value)}
+                required
+                type="email"
+                value={email}
+              />
+              <label htmlFor="password">Password</label>
+              <input
+                autoComplete="current-password"
+                id="password"
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                type="password"
+                value={password}
+              />
+              <button className="primary-button" disabled={busy} type="submit">
+                {busy ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+          )}
           {error && <p className="error-message" role="alert">{error}</p>}
-          <button className="primary-button" disabled={busy} type="submit">
-            {busy ? "Signing in…" : "Sign in"}
-          </button>
           <p className="login-foot">Session tokens are held in memory and cleared on sign-out.</p>
-        </form>
+        </section>
       </main>
     );
   }
@@ -377,15 +467,7 @@ export default function Home() {
             <button className="quiet-button" onClick={() => setReloadKey((value) => value + 1)} type="button">
               Refresh
             </button>
-            <button className="quiet-button" onClick={() => {
-              incidentRequest.current?.abort();
-              activeIncidentId.current = null;
-              setToken(null);
-              setDashboard(null);
-              setUserRole(null);
-              setIncidentDetail(null);
-              setSelectedIncidentId(null);
-            }} type="button">
+            <button className="quiet-button" onClick={() => void signOut()} type="button">
               Sign out
             </button>
           </div>
@@ -506,7 +588,11 @@ export default function Home() {
                         <span className={`status-dot ${integration.status === "unhealthy" ? "danger-dot" : ""}`} />
                         <strong>{integration.integration}</strong>
                         <span>{integration.region || "account"}</span>
-                        <small>{integration.last_error_code ?? integration.status}</small>
+                        <small>
+                          {integration.last_error_code ?? integration.status}
+                          {" · checked "}
+                          {formatTime(integration.last_checked_at)}
+                        </small>
                       </div>
                     ))}
                   </div>

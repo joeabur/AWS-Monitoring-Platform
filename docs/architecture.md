@@ -81,5 +81,15 @@ connections without TLS mode.
 
 PostgreSQL is the production database. Run migrations once as a deployment job before API replicas
 start, and do not run migrations concurrently as application startup work in every replica. The
-Docker images run as non-root users. Terraform in this repository is currently an opt-in event
-pipeline module, not a complete production root stack.
+Docker images run as non-root users. Terraform includes both an opt-in production environment and
+an event-pipeline module; neither is applied automatically. See the [production deployment
+guide](../infrastructure/terraform/environments/production/README.md).
+
+## Monitoring boundary
+
+The application monitors security events and findings; it does not yet collect customer workload
+CloudWatch metrics or inventory. Embedded Metric Format in the API and worker, plus the production
+CloudWatch dashboard and alarms, measure the monitoring platform itself. An AWS account's
+GuardDuty, Security Hub, and Config data arrives through selected event rules or bounded manual
+syncs. Resource CPU, memory, disk, network, service health, cost, and application traces are not
+queried by the product.

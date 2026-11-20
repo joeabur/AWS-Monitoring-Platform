@@ -9,10 +9,10 @@ CloudTrail data events are not selected by this module.
 The queue is intended for a worker image built from `backend/Dockerfile.worker`, whose handler is
 `app.ingestion.worker.lambda_handler`. Configure the Lambda SQS event-source mapping with
 `ReportBatchItemFailures` so a bad message does not force successful messages in the same batch to
-be replayed. With the queue's current 180-second visibility timeout and no batching window, keep the
-Lambda timeout at or below 30 seconds; otherwise increase queue visibility to at least six times the
-function timeout plus the batching window. Inject `DATABASE_URL` from a secret manager and provide
-network access to PostgreSQL. The worker does not need `JWT_SECRET_KEY`. Grant the worker only
+be replayed. The queue visibility timeout is at least six times the configured worker timeout plus
+the batching window, and is never below 180 seconds. The worker obtains the database password from
+Secrets Manager using its task role and needs network access to PostgreSQL. It does not need
+`JWT_SECRET_KEY`. Grant the worker only
 `sqs:ReceiveMessage`, `sqs:DeleteMessage`, and
 `sqs:GetQueueAttributes` on `events_queue_arn`; the Terraform module does not create that consumer
 role or deploy a Lambda.

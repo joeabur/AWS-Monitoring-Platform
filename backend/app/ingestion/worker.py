@@ -1,22 +1,23 @@
 import json
 import logging
+import time
 from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
-from app.database import get_session_factory
+from app.database import get_session_factory, is_postgres_database
 from app.ingestion.cloudtrail import EventNormalizationError, expand_securityhub_event
 from app.ingestion.service import ingest_cloudtrail_event
+from app.telemetry import emit_emf_metric
 
 logger = logging.getLogger(__name__)
 
 
 def lambda_handler(event: dict[str, Any], _: object) -> dict[str, list[dict[str, str]]]:
     """Process an SQS Lambda batch; failed records are retried independently."""
-    database_url = get_settings().database_url
-    if not database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+    if not is_postgres_database(get_settings()):
         raise RuntimeError("The SQS worker requires a PostgreSQL DATABASE_URL")
 
     records = event.get("Records")
@@ -24,6 +25,7 @@ def lambda_handler(event: dict[str, Any], _: object) -> dict[str, list[dict[str,
         raise TypeError("SQS event must contain a Records list")
 
     failures: list[dict[str, str]] = []
+    processed_count = 0
     for record in records:
         if not isinstance(record, Mapping):
             raise TypeError("Every SQS record must be an object")
@@ -49,6 +51,7 @@ def lambda_handler(event: dict[str, Any], _: object) -> dict[str, list[dict[str,
                     "duplicate_count": sum(result.duplicate for result in results),
                 },
             )
+            processed_count += 1
         except (KeyError, json.JSONDecodeError, EventNormalizationError, SQLAlchemyError):
             logger.exception(
                 "Failed to process CloudTrail SQS message",
@@ -56,4 +59,24 @@ def lambda_handler(event: dict[str, Any], _: object) -> dict[str, list[dict[str,
             )
             failures.append({"itemIdentifier": message_id})
 
+    emit_emf_metric(
+        {
+            "_aws": {
+                "Timestamp": int(time.time() * 1000),
+                "CloudWatchMetrics": [
+                    {
+                        "Namespace": "AWSMonitoringPlatform",
+                        "Dimensions": [["Service"]],
+                        "Metrics": [
+                            {"Name": "WorkerMessagesProcessed", "Unit": "Count"},
+                            {"Name": "WorkerMessagesFailed", "Unit": "Count"},
+                        ],
+                    }
+                ],
+            },
+            "Service": "worker",
+            "WorkerMessagesProcessed": processed_count,
+            "WorkerMessagesFailed": len(failures),
+        }
+    )
     return {"batchItemFailures": failures}

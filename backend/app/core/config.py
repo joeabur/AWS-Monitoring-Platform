@@ -1,6 +1,7 @@
 import ipaddress
 import re
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
@@ -57,7 +58,17 @@ class MonitoredAwsAccount(BaseModel):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    auth_provider: Literal["local", "cognito"] = "local"
+    cognito_issuer: str | None = None
+    cognito_client_id: str | None = None
     database_url: str = "sqlite:///./monitoring.db"
+    database_host: str | None = None
+    database_name: str | None = None
+    database_port: int = Field(default=5432, ge=1, le=65535)
+    database_password_secret_arn: str | None = None
+    database_sslrootcert: str = "/etc/ssl/certs/ca-certificates.crt"
+    evidence_retention_days: int = Field(default=90, ge=1, le=36500)
+    audit_archive_bucket: str | None = None
     jwt_secret_key: SecretStr | None = Field(default=None, min_length=32)
     jwt_expire_minutes: int = Field(default=30, gt=0)
     cors_origins: str = "http://localhost:3000"
@@ -78,6 +89,41 @@ class Settings(BaseSettings):
     notification_email_from: str | None = None
     notification_email_to: str = ""
     mcp_enabled: bool = False
+
+    @field_validator("cognito_issuer")
+    @classmethod
+    def validate_cognito_issuer(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("COGNITO_ISSUER must be a valid HTTPS issuer URL") from exc
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("COGNITO_ISSUER must be an exact HTTPS issuer URL")
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_auth_configuration(self) -> "Settings":
+        if self.auth_provider == "cognito":
+            if not self.cognito_issuer or not self.cognito_client_id:
+                raise ValueError(
+                    "COGNITO_ISSUER and COGNITO_CLIENT_ID are required for Cognito authentication"
+                )
+        elif self.cognito_issuer or self.cognito_client_id:
+            raise ValueError("Cognito settings require AUTH_PROVIDER=cognito")
+        return self
 
     @field_validator("notification_min_severity")
     @classmethod
@@ -151,18 +197,30 @@ class Settings(BaseSettings):
     def validate_production_configuration(self) -> "Settings":
         if self.environment.strip().lower() != "production":
             return self
-        if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
-            raise ValueError("Production requires a PostgreSQL DATABASE_URL")
-        try:
-            database_query = parse_qs(urlsplit(self.database_url).query)
-        except ValueError as exc:
-            raise ValueError("Production DATABASE_URL is invalid") from exc
-        if database_query.get("sslmode", [None])[-1] not in {
-            "require",
-            "verify-ca",
-            "verify-full",
-        }:
-            raise ValueError("Production DATABASE_URL must require TLS using sslmode")
+        if self.auth_provider != "cognito":
+            raise ValueError("Production requires Cognito authentication")
+        if not self.audit_archive_bucket:
+            raise ValueError("Production requires an immutable audit archive bucket")
+        if self.database_password_secret_arn:
+            if not self.database_host or not self.database_name:
+                raise ValueError(
+                    "DATABASE_HOST and DATABASE_NAME are required with a database password secret"
+                )
+            if not self.database_password_secret_arn.startswith("arn:"):
+                raise ValueError("DATABASE_PASSWORD_SECRET_ARN must be an AWS secret ARN")
+        else:
+            if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+                raise ValueError("Production requires a PostgreSQL DATABASE_URL")
+            try:
+                database_query = parse_qs(urlsplit(self.database_url).query)
+            except ValueError as exc:
+                raise ValueError("Production DATABASE_URL is invalid") from exc
+            if database_query.get("sslmode", [None])[-1] not in {
+                "require",
+                "verify-ca",
+                "verify-full",
+            }:
+                raise ValueError("Production DATABASE_URL must require TLS using sslmode")
 
         origins = self.allowed_origins
         if not origins:

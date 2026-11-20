@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -31,6 +33,22 @@ def test_request_id_is_validated_and_propagated(client) -> None:
 
     assert invalid.headers["x-request-id"] != "bad id\n"
     assert valid.headers["x-request-id"] == "trace-123"
+
+
+def test_http_requests_emit_cloudwatch_embedded_metrics(client, capsys) -> None:
+    response = client.get("/api/v1/health/live")
+
+    metric_lines = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith('{"_aws"')
+    ]
+    assert response.status_code == 200
+    assert metric_lines
+    assert metric_lines[-1]["Service"] == "api"
+    assert metric_lines[-1]["StatusClass"] == "2xx"
+    assert metric_lines[-1]["ApiRequests"] == 1
+    assert metric_lines[-1]["ApiLatency"] >= 0
 
 
 def test_database_unavailable_health_endpoints_return_503(client, db_session, monkeypatch) -> None:
@@ -77,6 +95,55 @@ def test_login_rejects_unknown_user(client) -> None:
     )
 
     assert response.status_code == 401
+
+
+def test_local_password_login_is_disabled_when_cognito_is_configured(client, monkeypatch) -> None:
+    from app.core.config import Settings
+
+    monkeypatch.setattr(
+        "app.api.routes.get_settings",
+        lambda: Settings(
+            auth_provider="cognito",
+            cognito_issuer="https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example",
+            cognito_client_id="example-client",
+        ),
+    )
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "correct-horse-battery"},
+    )
+
+    assert response.status_code == 403
+    assert "disabled" in response.json()["detail"]
+
+
+def test_cognito_authentication_uses_preprovisioned_subject(
+    client, db_session, monkeypatch
+) -> None:
+    from app.core.config import Settings
+    from app.models import User
+
+    user = db_session.query(User).filter(User.email == "admin@example.com").one()
+    user.cognito_sub = "cognito-admin-subject"
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.api.dependencies.get_settings",
+        lambda: Settings(
+            auth_provider="cognito",
+            cognito_issuer="https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example",
+            cognito_client_id="example-client",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.api.dependencies.decode_cognito_access_token",
+        lambda _: "cognito-admin-subject",
+    )
+
+    response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer verified-token"})
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "admin@example.com"
+    assert response.json()["role"] == "administrator"
 
 
 def test_login_rejects_passwords_over_the_configured_input_limit(client) -> None:

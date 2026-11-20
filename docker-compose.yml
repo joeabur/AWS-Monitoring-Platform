@@ -18,7 +18,10 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://monitor:monitor-local-only@db:5432/monitoring}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      AUTH_PROVIDER: ${AUTH_PROVIDER:-local}
+      COGNITO_ISSUER: ${COGNITO_ISSUER:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       MONITORED_AWS_ACCOUNTS: "${MONITORED_AWS_ACCOUNTS:-[]}"
@@ -59,9 +62,23 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_AUTH_MODE: ${NEXT_PUBLIC_AUTH_MODE:-local}
+        NEXT_PUBLIC_COGNITO_ISSUER: ${COGNITO_ISSUER:-}
+        NEXT_PUBLIC_COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+        NEXT_PUBLIC_COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
+        NEXT_PUBLIC_COGNITO_REDIRECT_URI: ${COGNITO_REDIRECT_URI:-}
+        NEXT_PUBLIC_COGNITO_POST_LOGOUT_REDIRECT_URI: ${COGNITO_POST_LOGOUT_REDIRECT_URI:-}
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      AUTH_PROVIDER: ${AUTH_PROVIDER:-local}
+      COGNITO_ISSUER: ${COGNITO_ISSUER:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
+      COGNITO_REDIRECT_URI: ${COGNITO_REDIRECT_URI:-}
+      COGNITO_POST_LOGOUT_REDIRECT_URI: ${COGNITO_POST_LOGOUT_REDIRECT_URI:-}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     healthcheck:
       test:
         - CMD

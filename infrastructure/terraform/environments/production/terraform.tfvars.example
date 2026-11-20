@@ -1,0 +1,25 @@
+aws_region            = "us-east-1"
+name_prefix           = "aws-monitor"
+app_domain_name       = "monitor.example.com"
+alb_certificate_arn   = "arn:aws:acm:us-east-1:123456789012:certificate/replace-me"
+cognito_domain_prefix = "replace-with-globally-unique-prefix"
+
+api_image_uri      = "123456789012.dkr.ecr.us-east-1.amazonaws.com/aws-monitor-api@sha256:replace-me"
+frontend_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/aws-monitor-frontend@sha256:replace-me"
+worker_image_uri   = "123456789012.dkr.ecr.us-east-1.amazonaws.com/aws-monitor-worker@sha256:replace-me"
+
+monitored_accounts = [
+  {
+    account_id = "111122223333"
+    name       = "security-account"
+    role_arn   = "arn:aws:iam::111122223333:role/CloudSecurityMonitoringReadOnly"
+  }
+]
+
+# Optional. If omitted, no DNS record or alarm email notification is created.
+route53_zone_id = null
+alarm_email     = null
+
+# Review region-specific cost, event volume, legal retention, and recovery requirements.
+evidence_retention_days = 90
+db_instance_class       = "db.t4g.medium"

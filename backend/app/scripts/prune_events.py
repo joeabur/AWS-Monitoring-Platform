@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.database import get_session_factory
 from app.models import CloudTrailEvent, DetectionAlert
 
@@ -25,17 +26,13 @@ def prune_expired_events(
         raise ValueError("batch_size must be between 1 and 10000")
 
     cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
-    evidence_ids = {
-        event_id
-        for event_refs in session.scalars(select(DetectionAlert.event_refs))
-        for event_id in event_refs
-    }
-
     scanned = 0
     eligible = 0
-    preserved = 0
+    expired_alert_references = 0
+    alerts_updated = 0
     last_id: UUID | None = None
     try:
+        alerts = session.scalars(select(DetectionAlert)).all()
         while True:
             query = (
                 select(CloudTrailEvent.id)
@@ -51,11 +48,17 @@ def prune_expired_events(
 
             scanned += len(event_ids)
             last_id = event_ids[-1]
-            deletable = [event_id for event_id in event_ids if str(event_id) not in evidence_ids]
-            eligible += len(deletable)
-            preserved += len(event_ids) - len(deletable)
-            if apply and deletable:
-                session.execute(delete(CloudTrailEvent).where(CloudTrailEvent.id.in_(deletable)))
+            expired_ids = {str(event_id) for event_id in event_ids}
+            eligible += len(event_ids)
+            for alert in alerts:
+                remaining_refs = [ref for ref in alert.event_refs if ref not in expired_ids]
+                removed_refs = len(alert.event_refs) - len(remaining_refs)
+                if removed_refs:
+                    expired_alert_references += removed_refs
+                    alert.event_refs = remaining_refs
+                    alerts_updated += 1
+            if apply:
+                session.execute(delete(CloudTrailEvent).where(CloudTrailEvent.id.in_(event_ids)))
 
         if apply:
             session.commit()
@@ -70,7 +73,8 @@ def prune_expired_events(
         "older_than_days": older_than_days,
         "scanned": scanned,
         "eligible_for_deletion": eligible,
-        "preserved_as_alert_evidence": preserved,
+        "expired_alert_references": expired_alert_references,
+        "alerts_updated": alerts_updated,
     }
 
 
@@ -78,7 +82,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Preview or remove old CloudTrail events not referenced by detection alerts."
     )
-    parser.add_argument("--older-than-days", type=int, default=90)
+    parser.add_argument(
+        "--older-than-days",
+        type=int,
+        default=get_settings().evidence_retention_days,
+    )
     parser.add_argument("--batch-size", type=int, default=1000)
     parser.add_argument(
         "--apply",

@@ -5,9 +5,11 @@ from uuid import UUID
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import decode_access_token
+from app.core.config import get_settings
+from app.core.security import decode_access_token, decode_cognito_access_token
 from app.database import get_db
 from app.models import User
 from app.schemas.auth import UserRole
@@ -28,11 +30,15 @@ def get_current_user(
     if credentials is None:
         raise unauthorized
     try:
-        user_id: UUID = decode_access_token(credentials.credentials)
+        if get_settings().auth_provider == "cognito":
+            cognito_sub = decode_cognito_access_token(credentials.credentials)
+            user = db.scalar(select(User).where(User.cognito_sub == cognito_sub))
+        else:
+            user_id: UUID = decode_access_token(credentials.credentials)
+            user = db.get(User, user_id)
     except (jwt.PyJWTError, ValueError):
         raise unauthorized from None
 
-    user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise unauthorized
     return user

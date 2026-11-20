@@ -1,8 +1,8 @@
 # Operations and deployment readiness
 
 This guide covers safe local operation and the checks required before a production deployment.
-It does not describe a ready-to-apply production stack: no AWS resources have been deployed, and
-the repository does not include a production root Terraform configuration.
+The repository includes an opt-in production Terraform environment, but no AWS resources have been
+deployed or validated in a live account.
 
 ## Local verification
 
@@ -31,14 +31,13 @@ It is a best-effort local safeguard, not distributed brute-force protection.
 
 ## Event retention
 
-The retention command uses a 90-day cutoff by default and only selects CloudTrail events older than
-the cutoff that are not referenced by any detection alert. Alert-linked event evidence is preserved
-so incident investigation and response workflows do not silently lose their references. This means
-the command does not bound the lifetime of alert-linked evidence; define and implement a separate
-alert/incident evidence retention policy before using it where legal or privacy policy requires a
-maximum lifetime.
+The retention command uses a 90-day cutoff by default. It deletes expired raw CloudTrail event rows
+and removes their IDs from alert evidence references, including references on open incidents. The
+event details will no longer be available in the application after pruning. Incident and response
+audit history remains in PostgreSQL and is exported daily to a versioned S3 bucket with Object Lock
+COMPLIANCE retention in the production Terraform environment.
 
-Run the command from the backend environment. It reports eligible and evidence-preserved counts
+Run the command from the backend environment. It reports eligible rows and references to be removed
 without changing data unless `--apply` is passed:
 
 ```bash
@@ -50,9 +49,19 @@ python -m app.scripts.prune_events --older-than-days 90 --apply
 Review the dry-run output and backup/retention approvals before applying. Schedule the command
 through a single controlled maintenance job, not every API replica. Candidate events are scanned
 in batches within one database transaction and deletion rolls back on failure; alert evidence
-references are loaded from the detection-alert table to protect linked events. Retention is based on
-event time; delayed arrivals older than the cutoff may be eligible immediately if they have no alert
-evidence.
+references are updated before expired rows are deleted. Retention is based on event time; delayed
+arrivals older than the cutoff may be eligible immediately.
+
+The production stack runs `app.scripts.export_audit` daily before the raw-event pruning task. The
+export includes incident and response-action audit entries, marks each row archived only after a
+successful S3 write, and leaves PostgreSQL audit history intact. Row-level markers ensure that an
+audit record inserted during an export is still picked up by the next run. A failure after the S3
+write but before the database commit can cause a duplicate immutable archive object/version; it does not
+advance archive markers or lose the audit rows. The Object Lock period
+defaults to 90 days; changing or deleting an object in COMPLIANCE mode is prohibited until its
+retention date. The archive's S3 lifecycle policy expires locked objects after the retention period
+plus one day. Configure the optional `alarm_email` to receive scheduled task failure notifications.
+Test restore and verify archive integrity as part of the production recovery exercise.
 
 ## Release and migration procedure
 
@@ -81,16 +90,18 @@ forward fix, not by guessing at a downgrade.
 - Store `JWT_SECRET_KEY`, database credentials, notification secrets, and AWS role external IDs in a
   secret manager. Rotate them under an approved procedure; do not place secrets in image layers,
   logs, Terraform state, or source control.
-- The app does not provide SSO/MFA or a distributed rate limiter. Require enterprise identity
-  controls at the ingress and configure per-user/IP request limits there before public exposure.
+- Production Terraform configures Cognito OIDC with required software-token MFA and administrative
+  user creation. Keep application roles mapped to stable Cognito `sub` values and provision them
+  only through the reviewed administrative workflow. The app does not provide a distributed rate
+  limiter; configure per-user/IP request limits at the ingress before public exposure.
   The built-in 10-per-minute login limiter is in-process only and must not be treated as distributed
   protection. Behind a proxy, configure Uvicorn `FORWARDED_ALLOW_IPS` to the exact trusted proxy
   addresses/CIDRs; the proxy must strip client-supplied forwarding headers. Keep a shared ingress
   limiter enabled regardless.
-- Use a private, encrypted PostgreSQL deployment with least-privilege database credentials,
-  encrypted backups, tested restore procedures, and a defined retention/deletion policy. The
-  retention CLI prunes only unreferenced events older than 90 days by default; it does not prune
-  alerts, incidents, or evidence-linked events and must be scheduled explicitly.
+- Use a private, encrypted PostgreSQL deployment with encrypted backups, tested restore procedures,
+  and a defined retention/deletion policy. The production environment uses private multi-AZ RDS and
+  Secrets Manager-managed credentials. Its scheduled retention job removes event evidence beyond
+  the configured period; confirm that this behavior meets legal and operational requirements.
 - Configure CloudTrail/EventBridge/SQS and the worker independently. Enable SQS partial batch
   failure reporting, keep queue visibility at least six times the worker timeout plus batching
   window, alarm on queue age/depth and both DLQs, and rehearse safe DLQ redrive.
@@ -134,7 +145,8 @@ EventBridge/SQS requests and retention, database sizing/backup retention, log in
 egress. Add a budget and billing alarm, record an owner and monthly cap, and get approval. No
 Terraform apply is part of CI or local startup.
 
-The event-pipeline Terraform module is opt-in. Before deployment, review its plan and policies in an
+The production Terraform environment and event-pipeline module are opt-in. Before deployment, review
+the plan and policies in an
 isolated account, save the plan for review, confirm the expected AWS cost, and document the specific
 calling stack. Teardown must destroy the calling stack, then verify queues/rules/policies are gone;
 review and preserve DLQ messages before removing their queues. This module does not create the
@@ -142,9 +154,7 @@ database, worker, worker execution role, alarms, or cross-account event-bus forw
 
 ## Readiness gaps
 
-Production use still requires a deployed/tested AWS environment, production Terraform root stack,
-application SSO/MFA or reviewed session architecture, ingress rate limiting, event retention,
-load/soak testing against stated volume targets, backup/restore drills, and an independent security
-assessment. The local login limiter is not a substitute for shared ingress throttling, and the event
-retention command does not bound alert-linked evidence. The CI checks are not a penetration test or
-a cloud integration test.
+Production use still requires a deployed/tested AWS environment, ingress rate limiting, load/soak
+testing against stated volume targets, backup/restore and archive-integrity drills, and an
+independent security assessment. The local login limiter is not a substitute for shared ingress
+throttling. The CI checks are not a penetration test or a cloud integration test.

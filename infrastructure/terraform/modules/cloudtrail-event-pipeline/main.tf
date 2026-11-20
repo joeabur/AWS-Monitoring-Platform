@@ -5,10 +5,13 @@ resource "aws_sqs_queue" "processing_dlq" {
 }
 
 resource "aws_sqs_queue" "events" {
-  name                       = "${var.name_prefix}-cloudtrail-events"
-  message_retention_seconds  = var.message_retention_seconds
-  visibility_timeout_seconds = 180
-  sqs_managed_sse_enabled    = true
+  name                      = "${var.name_prefix}-cloudtrail-events"
+  message_retention_seconds = var.message_retention_seconds
+  visibility_timeout_seconds = max(
+    180,
+    6 * var.worker_timeout_seconds + var.batching_window_seconds
+  )
+  sqs_managed_sse_enabled = true
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.processing_dlq.arn
     maxReceiveCount     = var.max_receive_count

@@ -55,4 +55,27 @@ variable "max_receive_count" {
     )
     error_message = "max_receive_count must be between 1 and 1000."
   }
+
+}
+
+variable "worker_timeout_seconds" {
+  description = "Worker timeout used to calculate a safe SQS message visibility timeout."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.worker_timeout_seconds >= 1 && var.worker_timeout_seconds <= 900
+    error_message = "worker_timeout_seconds must be between 1 and 900."
+  }
+}
+
+variable "batching_window_seconds" {
+  description = "Maximum Lambda SQS batching window in seconds."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.batching_window_seconds >= 0 && var.batching_window_seconds <= 300
+    error_message = "batching_window_seconds must be between 0 and 300."
+  }
 }

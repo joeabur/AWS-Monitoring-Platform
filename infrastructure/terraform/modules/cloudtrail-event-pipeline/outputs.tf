@@ -8,14 +8,39 @@ output "events_queue_url" {
   value       = aws_sqs_queue.events.url
 }
 
+output "events_queue_name" {
+  description = "SQS queue name used by CloudWatch metrics and the worker."
+  value       = aws_sqs_queue.events.name
+}
+
 output "processing_dlq_arn" {
   description = "DLQ receiving events the worker could not process after retries."
   value       = aws_sqs_queue.processing_dlq.arn
 }
 
+output "processing_dlq_url" {
+  description = "SQS processing DLQ URL."
+  value       = aws_sqs_queue.processing_dlq.url
+}
+
+output "processing_dlq_name" {
+  description = "SQS processing DLQ name."
+  value       = aws_sqs_queue.processing_dlq.name
+}
+
 output "delivery_dlq_arn" {
   description = "DLQ receiving events EventBridge could not deliver to SQS."
   value       = aws_sqs_queue.delivery_dlq.arn
+}
+
+output "delivery_dlq_url" {
+  description = "SQS EventBridge delivery DLQ URL."
+  value       = aws_sqs_queue.delivery_dlq.url
+}
+
+output "delivery_dlq_name" {
+  description = "SQS EventBridge delivery DLQ name."
+  value       = aws_sqs_queue.delivery_dlq.name
 }
 
 output "event_rule_arn" {

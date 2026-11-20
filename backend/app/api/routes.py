@@ -45,8 +45,17 @@ def readiness(db: Database) -> dict[str, str]:
 
 @router.post("/auth/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Database) -> TokenResponse:
+    if get_settings().auth_provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password login is disabled when Cognito authentication is configured",
+        )
     user = db.query(User).filter(User.email == payload.email.lower()).one_or_none()
-    password_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
+    password_hash = (
+        user.password_hash
+        if user is not None and user.password_hash is not None
+        else DUMMY_PASSWORD_HASH
+    )
     try:
         valid_password = verify_password(payload.password, password_hash)
     except UnknownHashError:
