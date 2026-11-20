@@ -2,3 +2,4 @@
 httpx>=0.28,<1
 pytest>=8.3,<9
 ruff>=0.9,<1
+h11>=0.16.0 # transitive dependency pinned by Aikido Autofix to remediate a vulnerability
